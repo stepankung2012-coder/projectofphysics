@@ -307,7 +307,7 @@ function App() {
             <Sparkles size={18} />
           </BrandMark>
           <div>
-            <ProductName>ФизПроект</ProductName>
+            <ProductName>Проект по физике</ProductName>
             <ProductHint>Дневник проектной деятельности</ProductHint>
           </div>
         </Brand>
