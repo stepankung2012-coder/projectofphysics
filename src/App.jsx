@@ -152,6 +152,7 @@ const createStageState = (stageIndex) => ({
 });
 
 const createInitialData = () => ({
+  studentProjectId: defaultProjects[0]?.id,
   projects: defaultProjects.map((project) => ({
     ...project,
     archived: false,
@@ -186,9 +187,19 @@ const normalizeProject = (project, index) => {
 
 const normalizeData = (rawData) => {
   if (!Array.isArray(rawData?.projects)) return createInitialData();
+  const projects = rawData.projects.map(normalizeProject);
+  const savedStudentProjectExists = projects.some(
+    (project) => project.id === rawData.studentProjectId,
+  );
   return {
     ...rawData,
-    projects: rawData.projects.map(normalizeProject),
+    studentProjectId:
+      rawData.studentProjectId === null
+        ? null
+        : savedStudentProjectExists
+          ? rawData.studentProjectId
+          : projects[0]?.id,
+    projects,
   };
 };
 
@@ -205,26 +216,35 @@ function loadData() {
 function App() {
   const [data, setData] = useState(loadData);
   const [role, setRole] = useState("student");
-  const [selectedProjectId, setSelectedProjectId] = useState(data.projects[0]?.id);
+  const [selectedProjectId, setSelectedProjectId] = useState(
+    data.studentProjectId || data.projects[0]?.id,
+  );
   const [selectedStage, setSelectedStage] = useState(0);
   const [previewField, setPreviewField] = useState(fields[0]);
   const [dragging, setDragging] = useState(false);
   const [aiPrompt, setAiPrompt] = useState("");
   const saveTimer = useRef(null);
 
+  const visibleProjects = useMemo(
+    () =>
+      role === "teacher"
+        ? data.projects
+        : data.projects.filter((project) => project.id === data.studentProjectId),
+    [data.projects, data.studentProjectId, role],
+  );
   const selectedProject = useMemo(
-    () => data.projects.find((project) => project.id === selectedProjectId),
-    [data.projects, selectedProjectId],
+    () => visibleProjects.find((project) => project.id === selectedProjectId),
+    [selectedProjectId, visibleProjects],
   );
   const stageState = selectedProject?.stages[selectedStage];
   const stageInfo = stages[selectedStage];
   const activeProjects = useMemo(
-    () => data.projects.filter((project) => !project.archived),
-    [data.projects],
+    () => visibleProjects.filter((project) => !project.archived),
+    [visibleProjects],
   );
   const archivedProjects = useMemo(
-    () => data.projects.filter((project) => project.archived),
-    [data.projects],
+    () => visibleProjects.filter((project) => project.archived),
+    [visibleProjects],
   );
 
   useEffect(() => {
@@ -249,6 +269,28 @@ function App() {
         };
       }),
     }));
+  };
+
+  const updateProjectDetails = (field, value) => {
+    if (role !== "student") return;
+    setData((current) => ({
+      ...current,
+      projects: current.projects.map((project) =>
+        project.id === current.studentProjectId
+          ? { ...project, [field]: value, updatedAt: "08.08.2026" }
+          : project,
+      ),
+    }));
+  };
+
+  const switchRole = (nextRole) => {
+    setRole(nextRole);
+    if (nextRole === "student") {
+      setSelectedProjectId(data.studentProjectId);
+      setSelectedStage(0);
+    } else if (!selectedProjectId) {
+      setSelectedProjectId(data.projects[0]?.id);
+    }
   };
 
   const handleFieldChange = (field, value) => {
@@ -306,7 +348,11 @@ function App() {
       archived: false,
       stages: stages.map((_, index) => createStageState(index)),
     };
-    setData((current) => ({ ...current, projects: [nextProject, ...current.projects] }));
+    setData((current) => ({
+      ...current,
+      studentProjectId: role === "student" ? id : current.studentProjectId,
+      projects: [nextProject, ...current.projects],
+    }));
     setSelectedProjectId(id);
     setSelectedStage(0);
   };
@@ -320,7 +366,7 @@ function App() {
     }));
 
     if (selectedProjectId === projectId) {
-      const nextProject = data.projects.find(
+      const nextProject = visibleProjects.find(
         (project) => project.id !== projectId && !project.archived,
       );
       setSelectedProjectId(nextProject?.id || projectId);
@@ -348,12 +394,18 @@ function App() {
     const remainingProjects = data.projects.filter((item) => item.id !== project.id);
     setData((current) => ({
       ...current,
+      studentProjectId:
+        current.studentProjectId === project.id ? null : current.studentProjectId,
       projects: current.projects.filter((item) => item.id !== project.id),
     }));
 
     if (selectedProjectId === project.id) {
+      const remainingVisibleProjects =
+        role === "teacher"
+          ? remainingProjects
+          : remainingProjects.filter((item) => item.id === data.studentProjectId);
       const nextProject =
-        remainingProjects.find((item) => !item.archived) || remainingProjects[0];
+        remainingVisibleProjects.find((item) => !item.archived) || remainingVisibleProjects[0];
       setSelectedProjectId(nextProject?.id);
       setSelectedStage(0);
     }
@@ -411,6 +463,18 @@ function App() {
               <ProductHint>Дневник проектной деятельности</ProductHint>
             </div>
           </Brand>
+          <HeaderActions>
+            <Segmented aria-label="Роль пользователя">
+              <RoleButton active={role === "student"} onClick={() => switchRole("student")}>
+                <UserRound size={16} />
+                Ученик
+              </RoleButton>
+              <RoleButton active={role === "teacher"} onClick={() => switchRole("teacher")}>
+                <GraduationCap size={16} />
+                Учитель
+              </RoleButton>
+            </Segmented>
+          </HeaderActions>
         </Header>
         <Main>
           <Sidebar>
@@ -448,11 +512,11 @@ function App() {
             Черновик сохранен
           </Autosave>
           <Segmented aria-label="Роль пользователя">
-            <RoleButton active={role === "student"} onClick={() => setRole("student")}>
+            <RoleButton active={role === "student"} onClick={() => switchRole("student")}>
               <UserRound size={16} />
               Ученик
             </RoleButton>
-            <RoleButton active={role === "teacher"} onClick={() => setRole("teacher")}>
+            <RoleButton active={role === "teacher"} onClick={() => switchRole("teacher")}>
               <GraduationCap size={16} />
               Учитель
             </RoleButton>
@@ -493,6 +557,26 @@ function App() {
             <TitleBlock>
               <h1>{selectedProject.title}</h1>
               <p>Восемь этапов проекта, дневник ученика, комментарии учителя и зафиксированный вклад ИИ.</p>
+              {role === "student" && (
+                <StudentProjectFields>
+                  <StudentProjectField>
+                    <span>Имя ученика</span>
+                    <ProfileInput
+                      value={selectedProject.owner}
+                      placeholder="Введите свое имя"
+                      onChange={(event) => updateProjectDetails("owner", event.target.value)}
+                    />
+                  </StudentProjectField>
+                  <StudentProjectField>
+                    <span>Тема проекта</span>
+                    <ProfileInput
+                      value={selectedProject.title}
+                      placeholder="Введите название темы"
+                      onChange={(event) => updateProjectDetails("title", event.target.value)}
+                    />
+                  </StudentProjectField>
+                </StudentProjectFields>
+              )}
             </TitleBlock>
           </TimelineHeader>
 
@@ -1098,6 +1182,44 @@ const TitleBlock = styled.div`
     color: var(--muted);
     font-size: 16px;
     line-height: 1.6;
+  }
+`;
+
+const StudentProjectFields = styled.div`
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  max-width: 760px;
+  margin-top: 10px;
+
+  @media (max-width: 700px) {
+    grid-template-columns: 1fr;
+  }
+`;
+
+const StudentProjectField = styled.label`
+  display: grid;
+  gap: 7px;
+  color: #334155;
+  font-size: 12px;
+  font-weight: 750;
+`;
+
+const ProfileInput = styled.input`
+  width: 100%;
+  min-height: 42px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--ink);
+  background: #ffffff;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 500;
+
+  &:focus {
+    outline: 2px solid #bfdbfe;
+    border-color: #60a5fa;
   }
 `;
 
