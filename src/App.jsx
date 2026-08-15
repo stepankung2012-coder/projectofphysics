@@ -1,5 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import styled from "@emotion/styled";
+import AuthScreen from "./AuthScreen";
+import { supabase } from "./supabaseClient";
 import {
   ArrowLeft,
   Archive,
@@ -12,6 +14,7 @@ import {
   GraduationCap,
   Lightbulb,
   LayoutDashboard,
+  LogOut,
   MessageSquareText,
   Plus,
   RefreshCcw,
@@ -19,6 +22,7 @@ import {
   Sparkles,
   Trash2,
   UploadCloud,
+  Users,
   UserRound,
 } from "lucide-react";
 
@@ -217,16 +221,56 @@ function loadData() {
   }
 }
 
+const stageToDatabaseRow = (projectId, stage, index) => ({
+  project_id: projectId,
+  stage_index: index,
+  status: stage.status,
+  teacher_comment: stage.teacherComment,
+  grade: stage.grade ? Number(stage.grade) : null,
+  diary: stage.diary,
+  response_grades: stage.responseGrades,
+  ai_chat: stage.aiChat,
+  files: stage.files,
+  updated_at: new Date().toISOString(),
+});
+
+const persistProjects = async (projects) => {
+  for (const project of projects) {
+    const { error: projectError } = await supabase.from("projects").upsert({
+      id: project.id,
+      student_id: project.studentId,
+      class_id: project.classId || null,
+      title: project.title,
+      subject: project.subject,
+      archived: project.archived,
+      updated_at: new Date().toISOString(),
+    });
+    if (projectError) throw projectError;
+
+    const { error: stagesError } = await supabase.from("project_stages").upsert(
+      project.stages.map((stage, index) => stageToDatabaseRow(project.id, stage, index)),
+      { onConflict: "project_id,stage_index" },
+    );
+    if (stagesError) throw stagesError;
+  }
+};
+
 function App() {
-  const [data, setData] = useState(loadData);
-  const [role, setRole] = useState("student");
-  const [selectedProjectId, setSelectedProjectId] = useState(
-    data.studentProjectId || data.projects[0]?.id,
-  );
+  const [data, setData] = useState({ studentProjectId: null, projects: [] });
+  const [session, setSession] = useState(null);
+  const [profile, setProfile] = useState(null);
+  const [classes, setClasses] = useState([]);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [workspaceReady, setWorkspaceReady] = useState(false);
+  const [workspaceError, setWorkspaceError] = useState("");
+  const [className, setClassName] = useState("");
+  const [classCode, setClassCode] = useState("");
+  const [selectedProjectId, setSelectedProjectId] = useState(null);
   const [selectedStage, setSelectedStage] = useState(0);
   const [dragging, setDragging] = useState(false);
   const [aiPrompt, setAiPrompt] = useState("");
   const saveTimer = useRef(null);
+  const role = profile?.role || "student";
 
   const visibleProjects = useMemo(
     () =>
@@ -251,12 +295,113 @@ function App() {
   );
 
   useEffect(() => {
+    const loadWorkspace = async (currentSession) => {
+      if (!currentSession) {
+        setProfile(null);
+        setData({ studentProjectId: null, projects: [] });
+        setWorkspaceReady(false);
+        setAuthLoading(false);
+        return;
+      }
+
+      setAuthLoading(true);
+      setWorkspaceError("");
+      const userId = currentSession.user.id;
+      const { data: profileRow, error: profileError } = await supabase
+        .from("profiles")
+        .select("id, full_name, role")
+        .eq("id", userId)
+        .single();
+
+      if (profileError) {
+        setWorkspaceError("Не удалось загрузить профиль пользователя.");
+        setAuthLoading(false);
+        return;
+      }
+
+      const [{ data: classRows, error: classesError }, { data: projectRows, error: projectsError }] =
+        await Promise.all([
+          supabase.from("classes").select("id, teacher_id, name, invite_code").order("created_at"),
+          supabase.from("projects").select("*").order("updated_at", { ascending: false }),
+        ]);
+
+      if (classesError || projectsError) {
+        setWorkspaceError("Не удалось загрузить данные из общей базы.");
+        setAuthLoading(false);
+        return;
+      }
+
+      const projectIds = (projectRows || []).map((project) => project.id);
+      const studentIds = [...new Set((projectRows || []).map((project) => project.student_id))];
+      const [{ data: stageRows }, { data: profileRows }] = await Promise.all([
+        projectIds.length
+          ? supabase.from("project_stages").select("*").in("project_id", projectIds)
+          : Promise.resolve({ data: [] }),
+        studentIds.length
+          ? supabase.from("profiles").select("id, full_name").in("id", studentIds)
+          : Promise.resolve({ data: [] }),
+      ]);
+
+      const names = Object.fromEntries((profileRows || []).map((item) => [item.id, item.full_name]));
+      const projects = (projectRows || []).map((project) => ({
+        id: project.id,
+        studentId: project.student_id,
+        classId: project.class_id,
+        title: project.title,
+        subject: project.subject,
+        owner: names[project.student_id] || profileRow.full_name || "Ученик",
+        updatedAt: project.updated_at,
+        archived: project.archived,
+        stages: stages.map((_, index) => {
+          const row = (stageRows || []).find(
+            (stage) => stage.project_id === project.id && stage.stage_index === index,
+          );
+          return normalizeStage(
+            row
+              ? {
+                  status: row.status,
+                  grade: row.grade?.toString() || "",
+                  teacherComment: row.teacher_comment,
+                  files: row.files,
+                  aiChat: row.ai_chat,
+                  diary: row.diary,
+                  responseGrades: row.response_grades,
+                }
+              : undefined,
+            index,
+          );
+        }),
+      }));
+
+      setSession(currentSession);
+      setProfile(profileRow);
+      setClasses(classRows || []);
+      setData({ studentProjectId: profileRow.role === "student" ? projects[0]?.id || null : null, projects });
+      setSelectedProjectId(projects[0]?.id || null);
+      setWorkspaceReady(true);
+      setAuthLoading(false);
+    };
+
+    supabase.auth.getSession().then(({ data: authData }) => loadWorkspace(authData.session));
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+      setSession(nextSession);
+      loadWorkspace(nextSession);
+    });
+    return () => listener.subscription.unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    if (!workspaceReady || !session) return undefined;
     clearTimeout(saveTimer.current);
-    saveTimer.current = setTimeout(() => {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-    }, 300);
+    saveTimer.current = setTimeout(async () => {
+      try {
+        await persistProjects(data.projects);
+      } catch (error) {
+        setWorkspaceError(`Ошибка сохранения: ${error.message}`);
+      }
+    }, 700);
     return () => clearTimeout(saveTimer.current);
-  }, [data]);
+  }, [data, session, workspaceReady]);
 
   const updateStage = (updater) => {
     setData((current) => ({
@@ -276,6 +421,10 @@ function App() {
 
   const updateProjectDetails = (field, value) => {
     if (role !== "student") return;
+    if (field === "owner") {
+      setProfile((current) => ({ ...current, full_name: value }));
+      supabase.from("profiles").update({ full_name: value }).eq("id", session.user.id);
+    }
     setData((current) => ({
       ...current,
       projects: current.projects.map((project) =>
@@ -284,16 +433,6 @@ function App() {
           : project,
       ),
     }));
-  };
-
-  const switchRole = (nextRole) => {
-    setRole(nextRole);
-    if (nextRole === "student") {
-      setSelectedProjectId(data.studentProjectId);
-      setSelectedStage(0);
-    } else if (!selectedProjectId) {
-      setSelectedProjectId(data.projects[0]?.id);
-    }
   };
 
   const handleFieldChange = (field, value) => {
@@ -310,6 +449,20 @@ function App() {
       ...stage,
       responseGrades: { ...stage.responseGrades, [field]: grade },
     }));
+  };
+
+  const submitStageForReview = async () => {
+    if (role !== "student" || !selectedProject || !stageState) return;
+    const submittedStage = { ...stageState, status: "На проверке" };
+    updateStage(() => submittedStage);
+    const { error } = await supabase.from("project_stages").upsert(
+      stageToDatabaseRow(selectedProject.id, submittedStage, selectedStage),
+      { onConflict: "project_id,stage_index" },
+    );
+    if (error) {
+      window.alert(`Не удалось отправить этап: ${error.message}`);
+      updateStage((stage) => ({ ...stage, status: "Черновик" }));
+    }
   };
 
   const handleFiles = (fileList) => {
@@ -349,12 +502,19 @@ function App() {
   };
 
   const createProject = () => {
-    const id = `project-${Date.now()}`;
+    if (role !== "student") return;
+    if (!classes.length) {
+      window.alert("Сначала подключитесь к классу по коду учителя.");
+      return;
+    }
+    const id = crypto.randomUUID();
     const nextProject = {
       id,
+      studentId: session.user.id,
+      classId: classes[0].id,
       title: "Новый проект по физике",
       subject: "Тема не выбрана",
-      owner: "Ученик",
+      owner: profile.full_name || "Ученик",
       updatedAt: "08.08.2026",
       archived: false,
       stages: stages.map((_, index) => createStageState(index)),
@@ -396,11 +556,17 @@ function App() {
     setSelectedStage(0);
   };
 
-  const deleteProject = (project) => {
+  const deleteProject = async (project) => {
     const confirmed = window.confirm(
       `Удалить проект «${project.title}»? Это действие нельзя отменить.`,
     );
     if (!confirmed) return;
+
+    const { error } = await supabase.from("projects").delete().eq("id", project.id);
+    if (error) {
+      window.alert("Не удалось удалить проект из общей базы.");
+      return;
+    }
 
     const remainingProjects = data.projects.filter((item) => item.id !== project.id);
     setData((current) => ({
@@ -421,6 +587,84 @@ function App() {
       setSelectedStage(0);
     }
   };
+
+  const createClass = async () => {
+    const name = className.trim();
+    if (!name) return;
+    const { data: createdClass, error } = await supabase
+      .from("classes")
+      .insert({ teacher_id: session.user.id, name })
+      .select("id, teacher_id, name, invite_code")
+      .single();
+    if (error) {
+      window.alert("Не удалось создать класс. Проверьте, что аккаунту назначена роль учителя.");
+      return;
+    }
+    setClasses((current) => [...current, createdClass]);
+    setClassName("");
+  };
+
+  const joinClass = async () => {
+    const code = classCode.trim();
+    if (!code) return;
+    const { error } = await supabase.rpc("join_class", { class_code: code });
+    if (error) {
+      window.alert(`Не удалось подключиться к классу: ${error.message}`);
+      return;
+    }
+    const { data: classRows } = await supabase
+      .from("classes")
+      .select("id, teacher_id, name, invite_code")
+      .order("created_at");
+    setClasses(classRows || []);
+    setClassCode("");
+  };
+
+  const signOut = async () => {
+    clearTimeout(saveTimer.current);
+    try {
+      await persistProjects(data.projects);
+    } catch (error) {
+      window.alert(`Не удалось сохранить изменения перед выходом: ${error.message}`);
+      return;
+    }
+    await supabase.auth.signOut();
+  };
+
+  const classPanel = (
+    <ClassPanel>
+      <ClassPanelTitle><Users size={15} />{role === "teacher" ? "Мои классы" : "Мой класс"}</ClassPanelTitle>
+      {role === "teacher" ? (
+        <>
+          <ClassForm>
+            <input
+              value={className}
+              placeholder="Например, 7А"
+              onChange={(event) => setClassName(event.target.value)}
+            />
+            <button type="button" onClick={createClass}>Создать</button>
+          </ClassForm>
+          {classes.map((item) => (
+            <ClassInfo key={item.id}>
+              <strong>{item.name}</strong>
+              <span>Код: <b>{item.invite_code}</b></span>
+            </ClassInfo>
+          ))}
+        </>
+      ) : classes.length ? (
+        classes.map((item) => <ClassInfo key={item.id}><strong>{item.name}</strong><span>Вы подключены</span></ClassInfo>)
+      ) : (
+        <ClassForm>
+          <input
+            value={classCode}
+            placeholder="Код класса"
+            onChange={(event) => setClassCode(event.target.value.toUpperCase())}
+          />
+          <button type="button" onClick={joinClass}>Подключиться</button>
+        </ClassForm>
+      )}
+    </ClassPanel>
+  );
 
   const renderProjectCard = (project) => {
     const done = project.stages.filter((stage) => stage.status === "Принят").length;
@@ -463,6 +707,10 @@ function App() {
     );
   };
 
+  if (authLoading) return <LoadingScreen>Загрузка приложения…</LoadingScreen>;
+  if (!session) return <AuthScreen />;
+  if (workspaceError) return <LoadingScreen>{workspaceError}</LoadingScreen>;
+
   if (!selectedProject || !stageState) {
     return (
       <Shell>
@@ -475,26 +723,17 @@ function App() {
             </div>
           </Brand>
           <HeaderActions>
-            <Segmented aria-label="Роль пользователя">
-              <RoleButton active={role === "student"} onClick={() => switchRole("student")}>
-                <UserRound size={16} />
-                Ученик
-              </RoleButton>
-              <RoleButton active={role === "teacher"} onClick={() => switchRole("teacher")}>
-                <GraduationCap size={16} />
-                Учитель
-              </RoleButton>
-            </Segmented>
+            <UserBadge>{role === "teacher" ? <GraduationCap size={16} /> : <UserRound size={16} />}{profile.full_name || session.user.email}</UserBadge>
+            <LogoutButton type="button" onClick={signOut}><LogOut size={16} />Выйти</LogoutButton>
           </HeaderActions>
         </Header>
         <Main>
           <Sidebar>
             <SidebarTop>
               <SidebarTitle><LayoutDashboard size={17} />Dashboard</SidebarTitle>
-              <IconButton aria-label="Создать проект" title="Создать проект" onClick={createProject}>
-                <Plus size={18} />
-              </IconButton>
+              {role === "student" && <IconButton aria-label="Создать проект" title="Создать проект" onClick={createProject}><Plus size={18} /></IconButton>}
             </SidebarTop>
+            {classPanel}
           </Sidebar>
           <EmptyWorkspace>
             <h1>Проектов пока нет</h1>
@@ -523,14 +762,8 @@ function App() {
             Черновик сохранен
           </Autosave>
           <Segmented aria-label="Роль пользователя">
-            <RoleButton active={role === "student"} onClick={() => switchRole("student")}>
-              <UserRound size={16} />
-              Ученик
-            </RoleButton>
-            <RoleButton active={role === "teacher"} onClick={() => switchRole("teacher")}>
-              <GraduationCap size={16} />
-              Учитель
-            </RoleButton>
+            <UserBadge>{role === "teacher" ? <GraduationCap size={16} /> : <UserRound size={16} />}{profile.full_name || session.user.email}</UserBadge>
+            <LogoutButton type="button" onClick={signOut}><LogOut size={16} />Выйти</LogoutButton>
           </Segmented>
         </HeaderActions>
       </Header>
@@ -542,10 +775,10 @@ function App() {
               <LayoutDashboard size={17} />
               Dashboard
             </SidebarTitle>
-            <IconButton aria-label="Создать проект" title="Создать проект" onClick={createProject}>
-              <Plus size={18} />
-            </IconButton>
+            {role === "student" && <IconButton aria-label="Создать проект" title="Создать проект" onClick={createProject}><Plus size={18} /></IconButton>}
           </SidebarTop>
+
+          {classPanel}
 
           <ProjectList>
             {activeProjects.map(renderProjectCard)}
@@ -796,15 +1029,13 @@ function App() {
 
                 <SubmitRow>
                   <PrimaryButton
-                    onClick={() =>
-                      updateStage((stage) => ({
-                        ...stage,
-                        status: "На проверке",
-                      }))
-                    }
+                    disabled={role !== "student" || stageState.status === "На проверке"}
+                    onClick={submitStageForReview}
                   >
-                    <Send size={17} />
-                    Отправить учителю
+                    {stageState.status === "На проверке" ? <Check size={17} /> : <Send size={17} />}
+                    {stageState.status === "На проверке"
+                      ? "Отправлено учителю"
+                      : "Отправить учителю"}
                   </PrimaryButton>
                 </SubmitRow>
               </DiarySection>
@@ -890,6 +1121,16 @@ const Shell = styled.div`
   color: var(--ink);
 `;
 
+const LoadingScreen = styled.div`
+  display: grid;
+  place-items: center;
+  min-height: 100vh;
+  padding: 24px;
+  color: var(--muted);
+  background: #f8fafc;
+  font-weight: 700;
+`;
+
 const Header = styled.header`
   position: sticky;
   top: 0;
@@ -943,6 +1184,32 @@ const HeaderActions = styled.div`
   align-items: center;
   gap: 12px;
   flex-wrap: wrap;
+`;
+
+const UserBadge = styled.div`
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 34px;
+  padding: 0 10px;
+  color: #334155;
+  font-size: 13px;
+  font-weight: 700;
+`;
+
+const LogoutButton = styled.button`
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 6px;
+  color: #64748b;
+  background: #ffffff;
+  font-size: 13px;
+  font-weight: 700;
 `;
 
 const Autosave = styled.div`
@@ -1016,6 +1283,61 @@ const SidebarTitle = styled.div`
   color: #334155;
   font-size: 14px;
   font-weight: 760;
+`;
+
+const ClassPanel = styled.section`
+  display: grid;
+  gap: 10px;
+  margin-bottom: 20px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: #ffffff;
+`;
+
+const ClassPanelTitle = styled.div`
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: #334155;
+  font-size: 13px;
+  font-weight: 800;
+`;
+
+const ClassForm = styled.div`
+  display: grid;
+  gap: 8px;
+
+  input {
+    min-width: 0;
+    min-height: 36px;
+    padding: 0 9px;
+    border: 1px solid var(--line);
+    border-radius: 7px;
+    outline: none;
+  }
+
+  button {
+    min-height: 34px;
+    border: 0;
+    border-radius: 7px;
+    color: #ffffff;
+    background: var(--blue);
+    font-size: 12px;
+    font-weight: 750;
+  }
+`;
+
+const ClassInfo = styled.div`
+  display: grid;
+  gap: 3px;
+  padding: 9px;
+  border-radius: 7px;
+  background: #f8fafc;
+  font-size: 12px;
+
+  span { color: var(--muted); }
+  b { color: var(--blue); letter-spacing: .08em; }
 `;
 
 const IconButton = styled.button`
