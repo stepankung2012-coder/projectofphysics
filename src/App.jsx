@@ -3,6 +3,8 @@ import styled from "@emotion/styled";
 import ReactMarkdown from "react-markdown";
 import {
   ArrowLeft,
+  Archive,
+  ArchiveRestore,
   Bot,
   Check,
   CheckCircle2,
@@ -16,6 +18,7 @@ import {
   RefreshCcw,
   Send,
   Sparkles,
+  Trash2,
   UploadCloud,
   UserRound,
 } from "lucide-react";
@@ -151,6 +154,7 @@ const createStageState = (stageIndex) => ({
 const createInitialData = () => ({
   projects: defaultProjects.map((project) => ({
     ...project,
+    archived: false,
     stages: stages.map((_, index) => createStageState(index)),
   })),
 });
@@ -175,12 +179,13 @@ const normalizeProject = (project, index) => {
     ...fallback,
     ...project,
     id: project?.id || `project-${index + 1}`,
+    archived: Boolean(project?.archived),
     stages: stages.map((_, stageIndex) => normalizeStage(project?.stages?.[stageIndex], stageIndex)),
   };
 };
 
 const normalizeData = (rawData) => {
-  if (!rawData?.projects?.length) return createInitialData();
+  if (!Array.isArray(rawData?.projects)) return createInitialData();
   return {
     ...rawData,
     projects: rawData.projects.map(normalizeProject),
@@ -213,6 +218,14 @@ function App() {
   );
   const stageState = selectedProject?.stages[selectedStage];
   const stageInfo = stages[selectedStage];
+  const activeProjects = useMemo(
+    () => data.projects.filter((project) => !project.archived),
+    [data.projects],
+  );
+  const archivedProjects = useMemo(
+    () => data.projects.filter((project) => project.archived),
+    [data.projects],
+  );
 
   useEffect(() => {
     clearTimeout(saveTimer.current);
@@ -290,6 +303,7 @@ function App() {
       subject: "Тема не выбрана",
       owner: "Ученик",
       updatedAt: "08.08.2026",
+      archived: false,
       stages: stages.map((_, index) => createStageState(index)),
     };
     setData((current) => ({ ...current, projects: [nextProject, ...current.projects] }));
@@ -297,7 +311,124 @@ function App() {
     setSelectedStage(0);
   };
 
-  if (!selectedProject || !stageState) return null;
+  const archiveProject = (projectId) => {
+    setData((current) => ({
+      ...current,
+      projects: current.projects.map((project) =>
+        project.id === projectId ? { ...project, archived: true } : project,
+      ),
+    }));
+
+    if (selectedProjectId === projectId) {
+      const nextProject = data.projects.find(
+        (project) => project.id !== projectId && !project.archived,
+      );
+      setSelectedProjectId(nextProject?.id || projectId);
+      setSelectedStage(0);
+    }
+  };
+
+  const restoreProject = (projectId) => {
+    setData((current) => ({
+      ...current,
+      projects: current.projects.map((project) =>
+        project.id === projectId ? { ...project, archived: false } : project,
+      ),
+    }));
+    setSelectedProjectId(projectId);
+    setSelectedStage(0);
+  };
+
+  const deleteProject = (project) => {
+    const confirmed = window.confirm(
+      `Удалить проект «${project.title}»? Это действие нельзя отменить.`,
+    );
+    if (!confirmed) return;
+
+    const remainingProjects = data.projects.filter((item) => item.id !== project.id);
+    setData((current) => ({
+      ...current,
+      projects: current.projects.filter((item) => item.id !== project.id),
+    }));
+
+    if (selectedProjectId === project.id) {
+      const nextProject =
+        remainingProjects.find((item) => !item.archived) || remainingProjects[0];
+      setSelectedProjectId(nextProject?.id);
+      setSelectedStage(0);
+    }
+  };
+
+  const renderProjectCard = (project) => {
+    const done = project.stages.filter((stage) => stage.status === "Принят").length;
+    return (
+      <ProjectCard key={project.id} active={project.id === selectedProjectId}>
+        <ProjectSelect
+          type="button"
+          onClick={() => {
+            setSelectedProjectId(project.id);
+            setSelectedStage(0);
+          }}
+        >
+          <ProjectTitle>{project.title}</ProjectTitle>
+          <ProjectMeta>{project.subject}</ProjectMeta>
+          <ProgressRow>
+            <ProgressBar>
+              <ProgressFill width={(done / stages.length) * 100} />
+            </ProgressBar>
+            <ProgressText>{done}/8</ProgressText>
+          </ProgressRow>
+        </ProjectSelect>
+        <ProjectActions>
+          {project.archived ? (
+            <ProjectAction type="button" onClick={() => restoreProject(project.id)}>
+              <ArchiveRestore size={14} />
+              Восстановить
+            </ProjectAction>
+          ) : (
+            <ProjectAction type="button" onClick={() => archiveProject(project.id)}>
+              <Archive size={14} />
+              В архив
+            </ProjectAction>
+          )}
+          <ProjectAction $danger type="button" onClick={() => deleteProject(project)}>
+            <Trash2 size={14} />
+            Удалить
+          </ProjectAction>
+        </ProjectActions>
+      </ProjectCard>
+    );
+  };
+
+  if (!selectedProject || !stageState) {
+    return (
+      <Shell>
+        <Header>
+          <Brand>
+            <BrandMark><Sparkles size={18} /></BrandMark>
+            <div>
+              <ProductName>Дневник проекта по физике</ProductName>
+              <ProductHint>Дневник проектной деятельности</ProductHint>
+            </div>
+          </Brand>
+        </Header>
+        <Main>
+          <Sidebar>
+            <SidebarTop>
+              <SidebarTitle><LayoutDashboard size={17} />Dashboard</SidebarTitle>
+              <IconButton aria-label="Создать проект" title="Создать проект" onClick={createProject}>
+                <Plus size={18} />
+              </IconButton>
+            </SidebarTop>
+          </Sidebar>
+          <EmptyWorkspace>
+            <h1>Проектов пока нет</h1>
+            <p>Создайте новый проект кнопкой «+» на Dashboard.</p>
+          </EmptyWorkspace>
+        </Main>
+      </Shell>
+    );
+  }
 
   return (
     <Shell>
@@ -342,29 +473,15 @@ function App() {
           </SidebarTop>
 
           <ProjectList>
-            {data.projects.map((project) => {
-              const done = project.stages.filter((stage) => stage.status === "Принят").length;
-              return (
-                <ProjectCard
-                  key={project.id}
-                  active={project.id === selectedProjectId}
-                  onClick={() => {
-                    setSelectedProjectId(project.id);
-                    setSelectedStage(0);
-                  }}
-                >
-                  <ProjectTitle>{project.title}</ProjectTitle>
-                  <ProjectMeta>{project.subject}</ProjectMeta>
-                  <ProgressRow>
-                    <ProgressBar>
-                      <ProgressFill width={(done / stages.length) * 100} />
-                    </ProgressBar>
-                    <ProgressText>{done}/8</ProgressText>
-                  </ProgressRow>
-                </ProjectCard>
-              );
-            })}
+            {activeProjects.map(renderProjectCard)}
           </ProjectList>
+
+          {!!archivedProjects.length && (
+            <ArchiveSection>
+              <ArchiveTitle>Архив</ArchiveTitle>
+              <ProjectList>{archivedProjects.map(renderProjectCard)}</ProjectList>
+            </ArchiveSection>
+          )}
         </Sidebar>
 
         <Workspace>
@@ -819,15 +936,66 @@ const ProjectList = styled.div`
   }
 `;
 
-const ProjectCard = styled.button`
+const ProjectCard = styled.div`
   width: 100%;
-  min-height: 126px;
-  padding: 16px;
   border: 1px solid ${({ active }) => (active ? "#bfdbfe" : "var(--line)")};
   border-radius: 8px;
-  text-align: left;
+  overflow: hidden;
   background: ${({ active }) => (active ? "var(--blue-soft)" : "#ffffff")};
   box-shadow: ${({ active }) => (active ? "0 10px 24px rgba(37, 99, 235, 0.08)" : "none")};
+`;
+
+const ProjectSelect = styled.button`
+  width: 100%;
+  min-height: 124px;
+  padding: 16px;
+  border: 0;
+  text-align: left;
+  color: inherit;
+  background: transparent;
+`;
+
+const ProjectActions = styled.div`
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1px;
+  border-top: 1px solid var(--line);
+  background: var(--line);
+`;
+
+const ProjectAction = styled.button`
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 36px;
+  padding: 6px 8px;
+  border: 0;
+  color: ${({ $danger }) => ($danger ? "#b91c1c" : "#475569")};
+  background: #ffffff;
+  font-size: 12px;
+  font-weight: 700;
+
+  &:hover {
+    background: ${({ $danger }) => ($danger ? "#fef2f2" : "#f8fafc")};
+  }
+`;
+
+const ArchiveSection = styled.section`
+  display: grid;
+  gap: 10px;
+  margin-top: 24px;
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+`;
+
+const ArchiveTitle = styled.h2`
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 `;
 
 const ProjectTitle = styled.div`
@@ -875,6 +1043,24 @@ const Workspace = styled.section`
 
   @media (max-width: 760px) {
     padding: 18px 16px;
+  }
+`;
+
+const EmptyWorkspace = styled.section`
+  display: grid;
+  place-content: center;
+  gap: 8px;
+  min-height: calc(100vh - 72px);
+  padding: 30px;
+  text-align: center;
+
+  h1,
+  p {
+    margin: 0;
+  }
+
+  p {
+    color: var(--muted);
   }
 `;
 
