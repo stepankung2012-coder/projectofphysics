@@ -1,6 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import styled from "@emotion/styled";
-import ReactMarkdown from "react-markdown";
 import {
   ArrowLeft,
   Archive,
@@ -149,6 +148,7 @@ const createStageState = (stageIndex) => ({
   files: [],
   aiChat: [],
   diary: Object.fromEntries(fields.map((field) => [field, ""])),
+  responseGrades: Object.fromEntries(fields.map((field) => [field, ""])),
 });
 
 const createInitialData = () => ({
@@ -170,6 +170,10 @@ const normalizeStage = (stage, index) => {
     diary: {
       ...base.diary,
       ...(stage?.diary || {}),
+    },
+    responseGrades: {
+      ...base.responseGrades,
+      ...(stage?.responseGrades || {}),
     },
   };
 };
@@ -220,7 +224,6 @@ function App() {
     data.studentProjectId || data.projects[0]?.id,
   );
   const [selectedStage, setSelectedStage] = useState(0);
-  const [previewField, setPreviewField] = useState(fields[0]);
   const [dragging, setDragging] = useState(false);
   const [aiPrompt, setAiPrompt] = useState("");
   const saveTimer = useRef(null);
@@ -298,6 +301,14 @@ function App() {
       ...stage,
       status: stage.status === "Не начат" ? "Черновик" : stage.status,
       diary: { ...stage.diary, [field]: value },
+    }));
+  };
+
+  const handleResponseGradeChange = (field, grade) => {
+    if (role !== "teacher") return;
+    updateStage((stage) => ({
+      ...stage,
+      responseGrades: { ...stage.responseGrades, [field]: grade },
     }));
   };
 
@@ -588,7 +599,6 @@ function App() {
                 completed={selectedProject.stages[index].status === "Принят"}
                 onClick={() => {
                   setSelectedStage(index);
-                  setPreviewField(fields[0]);
                 }}
               >
                 <StageIndex completed={selectedProject.stages[index].status === "Принят"}>
@@ -706,33 +716,41 @@ function App() {
                 <SectionHeading>
                   <div>
                     <h3>Электронный дневник</h3>
-                    <p>Поля поддерживают markdown и автоматически сохраняются.</p>
+                    <p>Ответы и выставленные за них оценки автоматически сохраняются.</p>
                   </div>
                 </SectionHeading>
                 {fields.map((field) => (
                   <FieldGroup key={field}>
                     <FieldHeader>
                       <label htmlFor={field}>{field}</label>
-                      <PreviewToggle
-                        type="button"
-                        active={previewField === field}
-                        onClick={() => setPreviewField(field)}
-                      >
-                        Markdown
-                      </PreviewToggle>
+                      {role === "teacher" ? (
+                        <ResponseGradeSelect
+                          aria-label={`Оценка за ответ: ${field}`}
+                          value={stageState.responseGrades[field]}
+                          onChange={(event) =>
+                            handleResponseGradeChange(field, event.target.value)
+                          }
+                        >
+                          <option value="">Оценка</option>
+                          {[1, 2, 3, 4, 5].map((grade) => (
+                            <option key={grade} value={grade}>{grade}</option>
+                          ))}
+                        </ResponseGradeSelect>
+                      ) : (
+                        <ResponseGrade $graded={Boolean(stageState.responseGrades[field])}>
+                          {stageState.responseGrades[field]
+                            ? `Оценка: ${stageState.responseGrades[field]}`
+                            : "Не оценено"}
+                        </ResponseGrade>
+                      )}
                     </FieldHeader>
                     <Textarea
                       id={field}
                       value={stageState.diary[field]}
                       disabled={role === "teacher"}
-                      placeholder="Напишите ответ. Можно использовать **жирный текст**, списки и ссылки."
+                      placeholder="Напишите ответ"
                       onChange={(event) => handleFieldChange(field, event.target.value)}
                     />
-                    {previewField === field && stageState.diary[field] && (
-                      <MarkdownPreview>
-                        <ReactMarkdown>{stageState.diary[field]}</ReactMarkdown>
-                      </MarkdownPreview>
-                    )}
                   </FieldGroup>
                 ))}
 
@@ -1516,15 +1534,29 @@ const FieldHeader = styled.div`
   }
 `;
 
-const PreviewToggle = styled.button`
-  min-height: 28px;
-  padding: 0 10px;
-  border: 1px solid ${({ active }) => (active ? "#93c5fd" : "var(--line)")};
+const ResponseGradeSelect = styled.select`
+  min-height: 32px;
+  padding: 0 9px;
+  border: 1px solid #93c5fd;
   border-radius: 7px;
-  color: ${({ active }) => (active ? "var(--blue)" : "var(--muted)")};
-  background: ${({ active }) => (active ? "var(--blue-soft)" : "#ffffff")};
+  color: var(--blue);
+  background: var(--blue-soft);
   font-size: 12px;
   font-weight: 750;
+`;
+
+const ResponseGrade = styled.span`
+  display: inline-flex;
+  align-items: center;
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid ${({ $graded }) => ($graded ? "#86efac" : "var(--line)")};
+  border-radius: 999px;
+  color: ${({ $graded }) => ($graded ? "#15803d" : "var(--muted)")};
+  background: ${({ $graded }) => ($graded ? "#f0fdf4" : "#f8fafc")};
+  font-size: 12px;
+  font-weight: 750;
+  white-space: nowrap;
 `;
 
 const Textarea = styled.textarea`
@@ -1542,23 +1574,6 @@ const Textarea = styled.textarea`
   &:focus {
     border-color: #93c5fd;
     box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.1);
-  }
-`;
-
-const MarkdownPreview = styled.div`
-  padding: 14px 16px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: #f8fafc;
-  color: #334155;
-  line-height: 1.6;
-
-  p:first-of-type {
-    margin-top: 0;
-  }
-
-  p:last-child {
-    margin-bottom: 0;
   }
 `;
 
