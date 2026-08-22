@@ -221,20 +221,32 @@ function loadData() {
   }
 }
 
-const stageToDatabaseRow = (projectId, stage, index) => ({
-  project_id: projectId,
-  stage_index: index,
-  status: stage.status,
-  teacher_comment: stage.teacherComment,
-  grade: stage.grade ? Number(stage.grade) : null,
-  diary: stage.diary,
-  response_grades: stage.responseGrades,
-  ai_chat: stage.aiChat,
-  files: stage.files,
-  updated_at: new Date().toISOString(),
-});
+const stageToDatabaseRow = (projectId, stage, index, role) => {
+  const sharedFields = {
+    project_id: projectId,
+    stage_index: index,
+    status: stage.status,
+    updated_at: new Date().toISOString(),
+  };
 
-const persistProjects = async (projects) => {
+  if (role === "teacher") {
+    return {
+      ...sharedFields,
+      teacher_comment: stage.teacherComment,
+      grade: stage.grade ? Number(stage.grade) : null,
+      response_grades: stage.responseGrades,
+    };
+  }
+
+  return {
+    ...sharedFields,
+    diary: stage.diary,
+    ai_chat: stage.aiChat,
+    files: stage.files,
+  };
+};
+
+const persistProjects = async (projects, role) => {
   for (const project of projects) {
     const { error: projectError } = await supabase.from("projects").upsert({
       id: project.id,
@@ -248,7 +260,7 @@ const persistProjects = async (projects) => {
     if (projectError) throw projectError;
 
     const { error: stagesError } = await supabase.from("project_stages").upsert(
-      project.stages.map((stage, index) => stageToDatabaseRow(project.id, stage, index)),
+      project.stages.map((stage, index) => stageToDatabaseRow(project.id, stage, index, role)),
       { onConflict: "project_id,stage_index" },
     );
     if (stagesError) throw stagesError;
@@ -395,13 +407,13 @@ function App() {
     clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(async () => {
       try {
-        await persistProjects(data.projects);
+        await persistProjects(data.projects, role);
       } catch (error) {
         setWorkspaceError(`Ошибка сохранения: ${error.message}`);
       }
     }, 700);
     return () => clearTimeout(saveTimer.current);
-  }, [data, session, workspaceReady]);
+  }, [data, role, session, workspaceReady]);
 
   const updateStage = (updater) => {
     setData((current) => ({
@@ -456,7 +468,7 @@ function App() {
     const submittedStage = { ...stageState, status: "На проверке" };
     updateStage(() => submittedStage);
     const { error } = await supabase.from("project_stages").upsert(
-      stageToDatabaseRow(selectedProject.id, submittedStage, selectedStage),
+      stageToDatabaseRow(selectedProject.id, submittedStage, selectedStage, "student"),
       { onConflict: "project_id,stage_index" },
     );
     if (error) {
@@ -623,7 +635,7 @@ function App() {
   const signOut = async () => {
     clearTimeout(saveTimer.current);
     try {
-      await persistProjects(data.projects);
+      await persistProjects(data.projects, role);
     } catch (error) {
       window.alert(`Не удалось сохранить изменения перед выходом: ${error.message}`);
       return;
