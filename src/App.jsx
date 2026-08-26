@@ -13,6 +13,7 @@ import {
   ClipboardCheck,
   FilePlus2,
   GraduationCap,
+  History,
   Lightbulb,
   LayoutDashboard,
   LogOut,
@@ -267,6 +268,16 @@ const stageToDatabaseRow = (projectId, stage, index, role) => {
   };
 };
 
+const stageSnapshot = (stage) => ({
+  status: stage.status,
+  diary: stage.diary,
+  sources: stage.sources,
+  files: stage.files.map(({ id, name, size, type, path }) => ({ id, name, size, type, path })),
+  teacherComment: stage.teacherComment,
+  grade: stage.grade,
+  responseGrades: stage.responseGrades,
+});
+
 const persistProjects = async (projects, role) => {
   for (const project of projects) {
     const { error: projectError } = await supabase.from("projects").upsert({
@@ -306,6 +317,8 @@ function App() {
   const [classFilter, setClassFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");
   const [uploadingFiles, setUploadingFiles] = useState(false);
+  const [aiLoading, setAiLoading] = useState(false);
+  const [historyEntries, setHistoryEntries] = useState([]);
   const saveTimer = useRef(null);
   const role = profile?.role || "student";
 
@@ -450,6 +463,20 @@ function App() {
     return () => clearTimeout(saveTimer.current);
   }, [data, role, session, workspaceReady]);
 
+  useEffect(() => {
+    if (role !== "teacher" || !selectedProjectId) {
+      setHistoryEntries([]);
+      return;
+    }
+    supabase
+      .from("stage_history")
+      .select("*")
+      .eq("project_id", selectedProjectId)
+      .eq("stage_index", selectedStage)
+      .order("created_at", { ascending: false })
+      .then(({ data: rows }) => setHistoryEntries(rows || []));
+  }, [role, selectedProjectId, selectedStage]);
+
   const updateStage = (updater) => {
     setData((current) => ({
       ...current,
@@ -498,6 +525,24 @@ function App() {
     }));
   };
 
+  const logHistory = async (entry) => {
+    if (!session || !selectedProject) return;
+    const { data: created, error } = await supabase.from("stage_history").insert({
+      project_id: selectedProject.id,
+      stage_index: selectedStage,
+      actor_id: session.user.id,
+      actor_role: role,
+      ...entry,
+    }).select("*").single();
+    if (error) {
+      window.alert(`Данные сохранены, но запись не попала в журнал: ${error.message}`);
+      return;
+    }
+    if (!error && created && role === "teacher") {
+      setHistoryEntries((current) => [created, ...current]);
+    }
+  };
+
   const submitStageForReview = async () => {
     if (role !== "student" || !selectedProject || !stageState) return;
     const submittedStage = { ...stageState, status: "На проверке" };
@@ -509,7 +554,22 @@ function App() {
     if (error) {
       window.alert(`Не удалось отправить этап: ${error.message}`);
       updateStage((stage) => ({ ...stage, status: "Черновик" }));
+      return;
     }
+    const { data: previousSubmission } = await supabase
+      .from("stage_history")
+      .select("after_value")
+      .eq("project_id", selectedProject.id)
+      .eq("stage_index", selectedStage)
+      .eq("event_type", "student_submission")
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    await logHistory({
+      event_type: "student_submission",
+      before_value: previousSubmission?.after_value || null,
+      after_value: stageSnapshot(submittedStage),
+    });
   };
 
   const handleFiles = async (fileList) => {
@@ -587,25 +647,45 @@ function App() {
     updateStage((stage) => ({ ...stage, sources: stage.sources.filter((source) => source.id !== sourceId) }));
   };
 
-  const sendAiMessage = (message = aiPrompt) => {
+  const sendAiMessage = async (message = aiPrompt) => {
     const text = message.trim();
-    if (!text) return;
-
-    const aiReply =
-      `Я помогу с этапом "${stageInfo.title}". Проверьте: 1) связана ли идея с целью этапа, ` +
-      "2) какие физические понятия нужно уточнить, 3) что ученик сделал самостоятельно. " +
-      "Для дневника лучше сохранить и сам запрос, и то, какие части ответа пришлось изменить.";
-
+    if (!text || role !== "student" || aiLoading || !selectedProject) return;
+    setAiLoading(true);
+    const { data: response, error } = await supabase.functions.invoke("ai-assistant", {
+      body: {
+        projectId: selectedProject.id,
+        projectTitle: selectedProject.title,
+        stageIndex: selectedStage,
+        stageTitle: stageInfo.title,
+        stageGoal: stageInfo.goal,
+        prompt: text,
+        recentMessages: stageState.aiChat,
+      },
+    });
+    if (error || response?.error) {
+      window.alert(response?.error || "Не удалось получить ответ ИИ. Проверьте настройку серверной функции.");
+      setAiLoading(false);
+      return;
+    }
     updateStage((stage) => ({
       ...stage,
       status: stage.status === "Не начат" ? "Черновик" : stage.status,
-      aiChat: [
-        ...stage.aiChat,
-        { id: `user-${Date.now()}`, role: "user", text },
-        { id: `ai-${Date.now()}`, role: "ai", text: aiReply },
-      ],
+      aiChat: [...stage.aiChat, response.userMessage, response.aiMessage],
     }));
     setAiPrompt("");
+    setAiLoading(false);
+  };
+
+  const reviewStage = async (nextStatus) => {
+    if (role !== "teacher" || !stageState) return;
+    const before = stageSnapshot(stageState);
+    const reviewed = { ...stageState, status: nextStatus };
+    updateStage(() => reviewed);
+    await logHistory({
+      event_type: "teacher_review",
+      before_value: before,
+      after_value: stageSnapshot(reviewed),
+    });
   };
 
   const createProject = () => {
@@ -1034,7 +1114,7 @@ function App() {
                     <p>Диалог сохраняется в этапе и помогает фиксировать вклад генеративного ИИ.</p>
                   </div>
                 </SectionHeading>
-                <QuickPrompts>
+                {role === "student" && selectedStage !== 4 && <QuickPrompts>
                   {[
                     "Помоги уточнить цель этапа",
                     "Какие ошибки могут быть в рассуждении?",
@@ -1045,7 +1125,7 @@ function App() {
                       {prompt}
                     </QuickPromptButton>
                   ))}
-                </QuickPrompts>
+                </QuickPrompts>}
                 <ChatLog>
                   {stageState.aiChat.length ? (
                     stageState.aiChat.map((message) => (
@@ -1061,7 +1141,7 @@ function App() {
                     </EmptyChat>
                   )}
                 </ChatLog>
-                <ChatComposer>
+                {role === "student" && selectedStage !== 4 ? <ChatComposer>
                   <ChatInput
                     value={aiPrompt}
                     placeholder="Например: помоги сформулировать гипотезу для опыта с маятником"
@@ -1073,11 +1153,11 @@ function App() {
                       }
                     }}
                   />
-                  <PrimaryButton type="button" onClick={() => sendAiMessage()}>
+                  <PrimaryButton type="button" disabled={aiLoading || !aiPrompt.trim()} onClick={() => sendAiMessage()}>
                     <Send size={17} />
-                    Спросить
+                    {aiLoading ? "ИИ отвечает…" : "Спросить"}
                   </PrimaryButton>
-                </ChatComposer>
+                </ChatComposer> : selectedStage === 4 ? <AiDisabledNote>На этапе эксперимента ИИ-помощник отключён.</AiDisabledNote> : null}
               </AiAssistant>
 
               <DiarySection>
@@ -1240,9 +1320,7 @@ function App() {
                     id="status"
                     disabled={role === "student"}
                     value={stageState.status}
-                    onChange={(event) =>
-                      updateStage((stage) => ({ ...stage, status: event.target.value }))
-                    }
+                    onChange={(event) => reviewStage(event.target.value)}
                   >
                     <option>Не начат</option>
                     <option>Черновик</option>
@@ -1266,21 +1344,37 @@ function App() {
                 <ButtonGrid>
                   <SecondaryButton
                     disabled={role === "student"}
-                    onClick={() =>
-                      updateStage((stage) => ({ ...stage, status: "Нужна доработка" }))
-                    }
+                    onClick={() => reviewStage("Нужна доработка")}
                   >
                     <RefreshCcw size={16} />
                     Вернуть
                   </SecondaryButton>
                   <PrimaryButton
                     disabled={role === "student"}
-                    onClick={() => updateStage((stage) => ({ ...stage, status: "Принят" }))}
+                    onClick={() => reviewStage("Принят")}
                   >
                     <Check size={16} />
                     Принять
                   </PrimaryButton>
                 </ButtonGrid>
+                {role === "teacher" && (
+                  <HistorySection>
+                    <HistoryHeader><History size={16} />Журнал изменений</HistoryHeader>
+                    {historyEntries.length ? historyEntries.map((entry) => (
+                      <HistoryItem key={entry.id}>
+                        <HistoryMeta>
+                          <strong>{entry.event_type === "ai_interaction" ? "Диалог с ИИ" : entry.event_type === "teacher_review" ? "Проверка учителя" : "Отправка ученика"}</strong>
+                          <span>{new Date(entry.created_at).toLocaleString("ru-RU")}</span>
+                        </HistoryMeta>
+                        {entry.prompt && <HistoryBlock><b>Запрос ученика</b><p>{entry.prompt}</p></HistoryBlock>}
+                        {entry.ai_response && <HistoryBlock><b>Ответ ИИ</b><p>{entry.ai_response}</p></HistoryBlock>}
+                        {entry.event_type === "student_submission" && entry.after_value?.diary && <HistoryBlock><b>Ответы ученика</b>{stageFields[selectedStage].filter((field) => entry.after_value.diary[field]).map((field) => <p key={field}><strong>{field}:</strong> {entry.after_value.diary[field]}</p>)}</HistoryBlock>}
+                        {entry.event_type === "student_submission" && entry.before_value?.diary && <HistoryBlock><b>Изменено после предыдущей проверки</b>{stageFields[selectedStage].filter((field) => entry.before_value.diary[field] !== entry.after_value?.diary?.[field]).map((field) => <p key={field}><strong>{field}:</strong> «{entry.before_value.diary[field] || "не заполнено"}» → «{entry.after_value?.diary?.[field] || "удалено"}»</p>)}</HistoryBlock>}
+                        {entry.event_type === "teacher_review" && <HistoryBlock><b>Решение учителя</b><p>{entry.after_value?.status || "Проверено"}{entry.after_value?.teacherComment ? `: ${entry.after_value.teacherComment}` : ""}</p></HistoryBlock>}
+                      </HistoryItem>
+                    )) : <EmptyHint>Записей по этому этапу пока нет.</EmptyHint>}
+                  </HistorySection>
+                )}
               </PanelSticky>
             </TeacherPanel>
           </StageGrid>
@@ -2441,6 +2535,61 @@ const ButtonGrid = styled.div`
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 10px;
+`;
+
+const AiDisabledNote = styled.div`
+  padding: 12px;
+  border-radius: 8px;
+  color: var(--muted);
+  background: #f8fafc;
+  font-size: 13px;
+  text-align: center;
+`;
+
+const HistorySection = styled.section`
+  display: grid;
+  gap: 10px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+`;
+
+const HistoryHeader = styled.div`
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: #0f172a;
+  font-size: 13px;
+  font-weight: 800;
+`;
+
+const HistoryItem = styled.article`
+  display: grid;
+  gap: 9px;
+  padding: 11px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f8fafc;
+`;
+
+const HistoryMeta = styled.div`
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11px;
+
+  span { color: var(--muted); }
+`;
+
+const HistoryBlock = styled.div`
+  display: grid;
+  gap: 4px;
+  padding-top: 7px;
+  border-top: 1px solid #e2e8f0;
+  font-size: 11px;
+  line-height: 1.45;
+
+  b { color: #475569; }
+  p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 `;
 
 export default App;
