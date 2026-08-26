@@ -7,6 +7,7 @@ import {
   Archive,
   ArchiveRestore,
   Bot,
+  CalendarDays,
   Check,
   CheckCircle2,
   ClipboardCheck,
@@ -18,18 +19,20 @@ import {
   MessageSquareText,
   Plus,
   RefreshCcw,
+  Search,
   Send,
   Sparkles,
   Trash2,
   UploadCloud,
   Users,
   UserRound,
+  X,
 } from "lucide-react";
 
 const stages = [
   {
     title: "Выбор темы и формулирование проблемы",
-    description: "При формулировке темы проекта - ученик выписывает всё, что его интересет - хобби, увлечения, книги, музыка. После этого транслирует это ИИ и просит сформулировать разные варианты тем для проектной деятельности по физике с учетом перечисленных интересов. Данные темы могут быть связаны между собой либо нет. После выбора темы проектной работы ученик сам ищет проблему, которую можно было бы рассмотреть в данной работе",
+    description: "При формулировке темы проекта ученик выписывает всё, что его интересует: хобби, увлечения, книги и музыку. После этого передаёт список ИИ и просит сформулировать разные варианты тем для проектной деятельности по физике с учётом перечисленных интересов. Темы могут быть связаны между собой или быть независимыми. После выбора темы ученик самостоятельно определяет проблему, которую можно рассмотреть в работе.",
     goal: "Понять, какую проблему нужно исследовать и почему она значима.",
     tasks: {
       teacher: "Помогает сузить тему, задает уточняющие вопросы, проверяет реалистичность проблемы.",
@@ -39,7 +42,7 @@ const stages = [
   },
   {
     title: "Постановка цели и выдвижение гипотезы",
-    description: "Ученик формулирует цель и гипотезу самостоятельно - вписывает ее в отдельную графу на сайте. После чего вбивает эту формулировку в ИИ с промтом \"скорректируй цель и гипотезу или предложи новую с учетом выбранной темы работы \". После чего учитель помогает выбрать окончательный вариант.",
+    description: "Ученик самостоятельно формулирует цель и гипотезу и вписывает их в отдельные поля на сайте. Затем передаёт формулировки ИИ с запросом: «Скорректируй цель и гипотезу или предложи новые с учётом выбранной темы работы». После этого учитель помогает выбрать окончательный вариант.",
     goal: "Сформулировать измеримую цель и проверяемую гипотезу.",
     tasks: {
       teacher: "Проверяет корректность цели и помогает связать гипотезу с учебным материалом.",
@@ -49,7 +52,7 @@ const stages = [
   },
   {
     title: "Планирование исследования",
-    description: "Ученик выстраивает план проведения  экспериментальной части работы. В процессе обсуждает это с ИИ. После чего учитель проверяет итоговый план по критериям безопасности, целесообразности и доступности эксперимента",
+    description: "Ученик выстраивает план проведения экспериментальной части работы и обсуждает его с ИИ. После этого учитель проверяет итоговый план по критериям безопасности, целесообразности и доступности эксперимента.",
     goal: "Получить ясный маршрут выполнения проекта.",
     tasks: {
       teacher: "Согласует этапы работы, предупреждает о рисках и ограничениях.",
@@ -59,7 +62,7 @@ const stages = [
   },
   {
     title: "Поиск и анализ информации",
-    description: "Ученик пишет промт в ИИ: напиши 10 реально существующих источников информации по моей теме работы, чтобы я будучи учеником \"...\" класса смог разобраться в изучаемом вопросе. Учитель рекомендует дополняет рекомендации другой литературой.",
+    description: "Ученик просит ИИ предложить 10 реально существующих источников по теме работы, доступных для его класса. Каждый источник необходимо проверить. Учитель дополняет список рекомендованной литературой.",
     goal: "Собрать надежную теоретическую основу проекта.",
     tasks: {
       teacher: "Рекомендует источники и учит отличать научную информацию от неподтвержденной.",
@@ -73,7 +76,7 @@ const stages = [
     goal: "Получить данные, необходимые для подтверждения или опровержения гипотезы.",
     tasks: {
       teacher: "Следит за безопасностью, корректностью методики и качеством измерений.",
-      ai: "не участвует на данном этапе",
+      ai: "Не участвует на данном этапе.",
       student: "Проводит эксперимент, записывает данные и прикладывает материалы.",
     },
   },
@@ -99,7 +102,7 @@ const stages = [
   },
   {
     title: "Защита и рефлексия",
-    description: "Ученик представляет проект, получает вопросы и анализирует проделанную работу",
+    description: "Ученик представляет проект, получает вопросы и анализирует проделанную работу.",
     goal: "Показать результат, осмыслить опыт и вклад каждого участника.",
     tasks: {
       teacher: "Оценивает защиту, задает вопросы и фиксирует рекомендации.",
@@ -143,6 +146,19 @@ const fields = [
   "Какие выводы сделал ученик?",
 ];
 
+const stageFields = [
+  ["Мои интересы", "Выбранная тема", "Проблема проекта", "Почему эта тема важна для меня"],
+  ["Цель проекта", "Гипотеза", "Как можно проверить гипотезу"],
+  ["План эксперимента", "Необходимые материалы и оборудование", "Правила безопасности", "Ожидаемый результат"],
+  ["Ключевые понятия", "Что удалось узнать", "Какие сведения требуют дополнительной проверки"],
+  ["Ход эксперимента", "Результаты измерений и наблюдений", "Отклонения от плана"],
+  ["Расчёты и обработка данных", "Погрешности", "Промежуточные выводы"],
+  ["Формат итогового продукта", "Структура выступления", "Что подготовлено самостоятельно"],
+  ["Итоговый вывод", "Вопросы после защиты", "Что получилось хорошо", "Что можно улучшить"],
+];
+
+const allDiaryFields = [...new Set([...fields, ...stageFields.flat()])];
+
 const STORAGE_KEY = "physics-project-journal-v1";
 
 const createStageState = (stageIndex) => ({
@@ -151,8 +167,9 @@ const createStageState = (stageIndex) => ({
   teacherComment: "",
   files: [],
   aiChat: [],
-  diary: Object.fromEntries(fields.map((field) => [field, ""])),
-  responseGrades: Object.fromEntries(fields.map((field) => [field, ""])),
+  diary: Object.fromEntries(allDiaryFields.map((field) => [field, ""])),
+  responseGrades: Object.fromEntries(allDiaryFields.map((field) => [field, ""])),
+  sources: [],
 });
 
 const createInitialData = () => ({
@@ -166,9 +183,12 @@ const createInitialData = () => ({
 
 const normalizeStage = (stage, index) => {
   const base = createStageState(index);
+  const storedSources = stage?.sources || stage?.diary?.__sources;
+  const normalizedStatus = stage?.status === "На доработке" ? "Нужна доработка" : stage?.status;
   return {
     ...base,
     ...stage,
+    status: normalizedStatus || base.status,
     files: Array.isArray(stage?.files) ? stage.files : base.files,
     aiChat: Array.isArray(stage?.aiChat) ? stage.aiChat : base.aiChat,
     diary: {
@@ -179,6 +199,7 @@ const normalizeStage = (stage, index) => {
       ...base.responseGrades,
       ...(stage?.responseGrades || {}),
     },
+    sources: Array.isArray(storedSources) ? storedSources : [],
   };
 };
 
@@ -240,7 +261,7 @@ const stageToDatabaseRow = (projectId, stage, index, role) => {
 
   return {
     ...sharedFields,
-    diary: stage.diary,
+    diary: { ...stage.diary, __sources: stage.sources },
     ai_chat: stage.aiChat,
     files: stage.files,
   };
@@ -281,6 +302,10 @@ function App() {
   const [selectedStage, setSelectedStage] = useState(0);
   const [dragging, setDragging] = useState(false);
   const [aiPrompt, setAiPrompt] = useState("");
+  const [projectSearch, setProjectSearch] = useState("");
+  const [classFilter, setClassFilter] = useState("all");
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [uploadingFiles, setUploadingFiles] = useState(false);
   const saveTimer = useRef(null);
   const role = profile?.role || "student";
 
@@ -297,6 +322,7 @@ function App() {
   );
   const stageState = selectedProject?.stages[selectedStage];
   const stageInfo = stages[selectedStage];
+  const nextStageIndex = selectedProject?.stages.findIndex((stage) => stage.status !== "Принят") ?? -1;
   const activeProjects = useMemo(
     () => visibleProjects.filter((project) => !project.archived),
     [visibleProjects],
@@ -305,6 +331,15 @@ function App() {
     () => visibleProjects.filter((project) => project.archived),
     [visibleProjects],
   );
+  const filteredActiveProjects = useMemo(() => {
+    const query = projectSearch.trim().toLowerCase();
+    return activeProjects.filter((project) => {
+      const matchesQuery = !query || `${project.title} ${project.owner} ${project.subject}`.toLowerCase().includes(query);
+      const matchesClass = classFilter === "all" || project.classId === classFilter;
+      const matchesStatus = statusFilter === "all" || project.stages.some((stage) => stage.status === statusFilter);
+      return matchesQuery && matchesClass && matchesStatus;
+    });
+  }, [activeProjects, classFilter, projectSearch, statusFilter]);
 
   useEffect(() => {
     const loadWorkspace = async (currentSession) => {
@@ -477,19 +512,79 @@ function App() {
     }
   };
 
-  const handleFiles = (fileList) => {
-    const incoming = Array.from(fileList).map((file) => ({
-      id: `${file.name}-${file.size}-${Date.now()}`,
-      name: file.name,
-      size: file.size,
-      type: file.type || "Файл",
-    }));
-    if (!incoming.length) return;
+  const handleFiles = async (fileList) => {
+    if (role !== "student" || !selectedProject) return;
+    const selectedFiles = Array.from(fileList || []);
+    if (!selectedFiles.length) return;
+    const oversized = selectedFiles.find((file) => file.size > 10 * 1024 * 1024);
+    if (oversized) {
+      window.alert(`Файл «${oversized.name}» больше 10 МБ.`);
+      return;
+    }
+
+    setUploadingFiles(true);
+    const uploaded = [];
+    for (const file of selectedFiles) {
+      const safeName = file.name.replace(/[^a-zA-Zа-яА-ЯёЁ0-9._-]/g, "-");
+      const path = `${selectedProject.id}/${selectedStage}/${crypto.randomUUID()}-${safeName}`;
+      const { error } = await supabase.storage.from("project-files").upload(path, file);
+      if (error) {
+        window.alert(`Не удалось загрузить «${file.name}»: ${error.message}`);
+        continue;
+      }
+      uploaded.push({ id: crypto.randomUUID(), name: file.name, size: file.size, type: file.type || "Файл", path });
+    }
+    if (uploaded.length) {
+      updateStage((stage) => ({
+        ...stage,
+        files: [...stage.files, ...uploaded],
+        status: stage.status === "Не начат" ? "Черновик" : stage.status,
+      }));
+    }
+    setUploadingFiles(false);
+  };
+
+  const openFile = async (file) => {
+    if (!file.path) return;
+    const { data: signed, error } = await supabase.storage
+      .from("project-files")
+      .createSignedUrl(file.path, 60);
+    if (error) {
+      window.alert(`Не удалось открыть файл: ${error.message}`);
+      return;
+    }
+    window.open(signed.signedUrl, "_blank", "noopener,noreferrer");
+  };
+
+  const removeFile = async (file) => {
+    if (role !== "student") return;
+    if (file.path) {
+      const { error } = await supabase.storage.from("project-files").remove([file.path]);
+      if (error) {
+        window.alert(`Не удалось удалить файл: ${error.message}`);
+        return;
+      }
+    }
+    updateStage((stage) => ({ ...stage, files: stage.files.filter((item) => item.id !== file.id) }));
+  };
+
+  const addSource = () => {
     updateStage((stage) => ({
       ...stage,
-      files: [...stage.files, ...incoming],
-      status: stage.status === "Не начат" ? "Черновик" : stage.status,
+      sources: [...stage.sources, { id: crypto.randomUUID(), title: "", author: "", url: "", verified: false, useful: "" }],
     }));
+  };
+
+  const updateSource = (sourceId, field, value) => {
+    updateStage((stage) => ({
+      ...stage,
+      status: stage.status === "Не начат" ? "Черновик" : stage.status,
+      sources: stage.sources.map((source) => source.id === sourceId ? { ...source, [field]: value } : source),
+    }));
+  };
+
+  const removeSource = (sourceId) => {
+    updateStage((stage) => ({ ...stage, sources: stage.sources.filter((source) => source.id !== sourceId) }));
   };
 
   const sendAiMessage = (message = aiPrompt) => {
@@ -680,6 +775,8 @@ function App() {
 
   const renderProjectCard = (project) => {
     const done = project.stages.filter((stage) => stage.status === "Принят").length;
+    const awaitingReview = project.stages.filter((stage) => stage.status === "На проверке").length;
+    const needsRevision = project.stages.filter((stage) => stage.status === "Нужна доработка").length;
     return (
       <ProjectCard key={project.id} active={project.id === selectedProjectId}>
         <ProjectSelect
@@ -690,7 +787,8 @@ function App() {
           }}
         >
           <ProjectTitle>{project.title}</ProjectTitle>
-          <ProjectMeta>{project.subject}</ProjectMeta>
+          <ProjectMeta>{role === "teacher" ? project.owner : project.subject}</ProjectMeta>
+          {(awaitingReview > 0 || needsRevision > 0) && <ProjectFlags>{awaitingReview > 0 && <span>{awaitingReview} на проверке</span>}{needsRevision > 0 && <span>{needsRevision} на доработке</span>}</ProjectFlags>}
           <ProgressRow>
             <ProgressBar>
               <ProgressFill width={(done / stages.length) * 100} />
@@ -792,8 +890,27 @@ function App() {
 
           {classPanel}
 
+          {role === "teacher" && (
+            <TeacherFilters>
+              <SearchField>
+                <Search size={15} />
+                <input value={projectSearch} placeholder="Ученик или проект" onChange={(event) => setProjectSearch(event.target.value)} />
+              </SearchField>
+              <select value={classFilter} onChange={(event) => setClassFilter(event.target.value)}>
+                <option value="all">Все классы</option>
+                {classes.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+              </select>
+              <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}>
+                <option value="all">Все статусы</option>
+                <option>На проверке</option>
+                <option>Нужна доработка</option>
+                <option>Принят</option>
+              </select>
+            </TeacherFilters>
+          )}
+
           <ProjectList>
-            {activeProjects.map(renderProjectCard)}
+            {(role === "teacher" ? filteredActiveProjects : activeProjects).map(renderProjectCard)}
           </ProjectList>
 
           {!!archivedProjects.length && (
@@ -833,6 +950,12 @@ function App() {
                   </StudentProjectField>
                 </StudentProjectFields>
               )}
+              <ProjectSummary>
+                <SummaryItem><strong>{selectedProject.stages.filter((stage) => stage.status === "Принят").length} из 8</strong><span>этапов принято</span></SummaryItem>
+                <SummaryItem><strong>{selectedProject.stages.filter((stage) => stage.status === "На проверке").length}</strong><span>ожидают проверки</span></SummaryItem>
+                <SummaryItem><strong>{selectedProject.stages.filter((stage) => stage.status === "Нужна доработка").length}</strong><span>нуждаются в доработке</span></SummaryItem>
+              </ProjectSummary>
+              <NextStep><strong>Следующий шаг:</strong> {nextStageIndex >= 0 ? `этап ${nextStageIndex + 1} — ${stages[nextStageIndex].title}` : "все этапы завершены"}</NextStep>
             </TitleBlock>
           </TimelineHeader>
 
@@ -964,14 +1087,14 @@ function App() {
                     <p>Ответы и выставленные за них оценки автоматически сохраняются.</p>
                   </div>
                 </SectionHeading>
-                {fields.map((field) => (
+                {stageFields[selectedStage].map((field) => (
                   <FieldGroup key={field}>
                     <FieldHeader>
                       <label htmlFor={field}>{field}</label>
                       {role === "teacher" ? (
                         <ResponseGradeSelect
                           aria-label={`Оценка за ответ: ${field}`}
-                          value={stageState.responseGrades[field]}
+                          value={stageState.responseGrades[field] || ""}
                           onChange={(event) =>
                             handleResponseGradeChange(field, event.target.value)
                           }
@@ -999,7 +1122,31 @@ function App() {
                   </FieldGroup>
                 ))}
 
-                <DropZone
+                {selectedStage === 3 && (
+                  <SourcesSection>
+                    <SectionHeading>
+                      <div>
+                        <h3>Проверка источников</h3>
+                        <p>Добавьте автора, ссылку и поясните, чем источник полезен. Отмечайте источник только после проверки его существования.</p>
+                      </div>
+                      {role === "student" && <SecondaryButton type="button" onClick={addSource}><Plus size={16} />Добавить источник</SecondaryButton>}
+                    </SectionHeading>
+                    {stageState.sources.length ? stageState.sources.map((source, sourceIndex) => (
+                      <SourceCard key={source.id}>
+                        <SourceCardHeader><strong>Источник {sourceIndex + 1}</strong>{role === "student" && <IconButton type="button" aria-label="Удалить источник" onClick={() => removeSource(source.id)}><X size={15} /></IconButton>}</SourceCardHeader>
+                        <SourceGrid>
+                          <Input disabled={role === "teacher"} value={source.title} placeholder="Название" onChange={(event) => updateSource(source.id, "title", event.target.value)} />
+                          <Input disabled={role === "teacher"} value={source.author} placeholder="Автор" onChange={(event) => updateSource(source.id, "author", event.target.value)} />
+                          <Input disabled={role === "teacher"} value={source.url} placeholder="Ссылка" onChange={(event) => updateSource(source.id, "url", event.target.value)} />
+                          <Input disabled={role === "teacher"} value={source.useful} placeholder="Чем источник полезен" onChange={(event) => updateSource(source.id, "useful", event.target.value)} />
+                        </SourceGrid>
+                        <VerifiedLabel><input type="checkbox" disabled={role === "teacher"} checked={source.verified} onChange={(event) => updateSource(source.id, "verified", event.target.checked)} />Существование и содержание источника проверены</VerifiedLabel>
+                      </SourceCard>
+                    )) : <EmptyHint>Источники пока не добавлены.</EmptyHint>}
+                  </SourcesSection>
+                )}
+
+                {role === "student" && <DropZone
                   dragging={dragging}
                   onDragOver={(event) => {
                     event.preventDefault();
@@ -1013,8 +1160,8 @@ function App() {
                   }}
                 >
                   <UploadCloud size={24} />
-                  <strong>Перетащите файлы сюда</strong>
-                  <span>или выберите материалы исследования, таблицы, изображения и черновики</span>
+                  <strong>{uploadingFiles ? "Загрузка…" : "Перетащите файлы сюда"}</strong>
+                  <span>До 10 МБ: материалы исследования, таблицы, изображения и черновики</span>
                   <HiddenInput
                     id="file-upload"
                     type="file"
@@ -1023,17 +1170,18 @@ function App() {
                   />
                   <FileButton htmlFor="file-upload">
                     <FilePlus2 size={16} />
-                    Выбрать файлы
+                    {uploadingFiles ? "Загрузка…" : "Выбрать файлы"}
                   </FileButton>
-                </DropZone>
+                </DropZone>}
 
                 {!!stageState.files.length && (
                   <FileList>
                     {stageState.files.map((file) => (
                       <FileItem key={file.id}>
                         <FilePlus2 size={16} />
-                        <span>{file.name}</span>
+                        <FileOpen type="button" disabled={!file.path} onClick={() => openFile(file)}>{file.name}</FileOpen>
                         <small>{Math.max(1, Math.round(file.size / 1024))} КБ</small>
+                        {role === "student" && <FileRemove type="button" aria-label={`Удалить ${file.name}`} onClick={() => removeFile(file)}><X size={14} /></FileRemove>}
                       </FileItem>
                     ))}
                   </FileList>
@@ -1041,7 +1189,7 @@ function App() {
 
                 <SubmitRow>
                   <PrimaryButton
-                    disabled={role !== "student" || stageState.status === "На проверке"}
+                    disabled={role !== "student" || stageState.status === "На проверке" || stageState.status === "Принят" || uploadingFiles}
                     onClick={submitStageForReview}
                   >
                     {stageState.status === "На проверке" ? <Check size={17} /> : <Send size={17} />}
@@ -1060,6 +1208,20 @@ function App() {
                   Проверка учителя
                 </PanelHeader>
                 <StatusPill status={stageState.status}>{stageState.status}</StatusPill>
+                <TeacherField>
+                  <label htmlFor="deadline"><CalendarDays size={14} /> Срок выполнения</label>
+                  <Input
+                    id="deadline"
+                    type="date"
+                    disabled={role === "student"}
+                    value={stageState.responseGrades.__deadline || ""}
+                    onChange={(event) => updateStage((stage) => ({
+                      ...stage,
+                      responseGrades: { ...stage.responseGrades, __deadline: event.target.value },
+                    }))}
+                  />
+                  {stageState.responseGrades.__deadline && <DeadlineHint $overdue={stageState.status !== "Принят" && new Date(`${stageState.responseGrades.__deadline}T23:59:59`) < new Date()}>{stageState.status !== "Принят" && new Date(`${stageState.responseGrades.__deadline}T23:59:59`) < new Date() ? "Срок истёк" : "Срок назначен"}</DeadlineHint>}
+                </TeacherField>
                 <TeacherField>
                   <label htmlFor="teacher-comment">Комментарий</label>
                   <TeacherTextarea
@@ -1085,7 +1247,7 @@ function App() {
                     <option>Не начат</option>
                     <option>Черновик</option>
                     <option>На проверке</option>
-                    <option>На доработке</option>
+                    <option>Нужна доработка</option>
                     <option>Принят</option>
                   </Select>
                 </TeacherField>
@@ -1105,7 +1267,7 @@ function App() {
                   <SecondaryButton
                     disabled={role === "student"}
                     onClick={() =>
-                      updateStage((stage) => ({ ...stage, status: "На доработке" }))
+                      updateStage((stage) => ({ ...stage, status: "Нужна доработка" }))
                     }
                   >
                     <RefreshCcw size={16} />
@@ -1352,6 +1514,35 @@ const ClassInfo = styled.div`
   b { color: var(--blue); letter-spacing: .08em; }
 `;
 
+const TeacherFilters = styled.div`
+  display: grid;
+  gap: 8px;
+  margin-bottom: 16px;
+
+  select {
+    min-height: 36px;
+    padding: 0 9px;
+    border: 1px solid var(--line);
+    border-radius: 7px;
+    color: #334155;
+    background: #ffffff;
+  }
+`;
+
+const SearchField = styled.label`
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 38px;
+  padding: 0 9px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  color: var(--muted);
+  background: #ffffff;
+
+  input { min-width: 0; width: 100%; border: 0; outline: 0; }
+`;
+
 const IconButton = styled.button`
   display: grid;
   place-items: center;
@@ -1444,6 +1635,22 @@ const ProjectMeta = styled.div`
   margin-top: 7px;
   color: var(--muted);
   font-size: 13px;
+`;
+
+const ProjectFlags = styled.div`
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 10px;
+
+  span {
+    padding: 4px 7px;
+    border-radius: 999px;
+    color: #1d4ed8;
+    background: #dbeafe;
+    font-size: 10px;
+    font-weight: 750;
+  }
 `;
 
 const ProgressRow = styled.div`
@@ -1547,6 +1754,36 @@ const StudentProjectFields = styled.div`
   @media (max-width: 700px) {
     grid-template-columns: 1fr;
   }
+`;
+
+const ProjectSummary = styled.div`
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 180px));
+  gap: 10px;
+  margin-top: 12px;
+
+  @media (max-width: 620px) { grid-template-columns: 1fr; }
+`;
+
+const SummaryItem = styled.div`
+  display: grid;
+  gap: 3px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+
+  strong { font-size: 18px; }
+  span { color: var(--muted); font-size: 11px; }
+`;
+
+const NextStep = styled.div`
+  width: fit-content;
+  padding: 10px 12px;
+  border-radius: 8px;
+  color: #1e40af;
+  background: var(--blue-soft);
+  font-size: 13px;
 `;
 
 const StudentProjectField = styled.label`
@@ -1856,6 +2093,54 @@ const FieldGroup = styled.div`
   gap: 8px;
 `;
 
+const SourcesSection = styled.section`
+  display: grid;
+  gap: 12px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+`;
+
+const SourceCard = styled.div`
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f8fafc;
+`;
+
+const SourceCardHeader = styled.div`
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+`;
+
+const SourceGrid = styled.div`
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+
+  @media (max-width: 650px) { grid-template-columns: 1fr; }
+`;
+
+const VerifiedLabel = styled.label`
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #334155;
+  font-size: 12px;
+  font-weight: 700;
+`;
+
+const EmptyHint = styled.div`
+  padding: 16px;
+  border: 1px dashed #cbd5e1;
+  border-radius: 8px;
+  color: var(--muted);
+  text-align: center;
+  font-size: 13px;
+`;
+
 const FieldHeader = styled.div`
   display: flex;
   align-items: center;
@@ -1962,7 +2247,7 @@ const FileList = styled.div`
 
 const FileItem = styled.div`
   display: grid;
-  grid-template-columns: auto 1fr auto;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
   align-items: center;
   gap: 10px;
   min-height: 42px;
@@ -1971,16 +2256,34 @@ const FileItem = styled.div`
   border-radius: 8px;
   background: #ffffff;
 
-  span {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
   small {
     color: var(--muted);
   }
+`;
+
+const FileOpen = styled.button`
+  min-width: 0;
+  overflow: hidden;
+  padding: 0;
+  border: 0;
+  color: var(--blue);
+  background: transparent;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+
+  &:disabled { color: #334155; }
+`;
+
+const FileRemove = styled.button`
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 6px;
+  color: #b91c1c;
+  background: #fef2f2;
 `;
 
 const SubmitRow = styled.div`
@@ -2063,7 +2366,7 @@ const StatusPill = styled.div`
   color: ${({ status }) =>
     status === "Принят"
       ? "var(--green)"
-      : status === "На доработке"
+      : status === "Нужна доработка"
         ? "var(--red)"
         : status === "На проверке"
           ? "var(--blue)"
@@ -2071,7 +2374,7 @@ const StatusPill = styled.div`
   background: ${({ status }) =>
     status === "Принят"
       ? "#ecfdf5"
-      : status === "На доработке"
+      : status === "Нужна доработка"
         ? "#fef2f2"
         : status === "На проверке"
           ? "var(--blue-soft)"
@@ -2085,10 +2388,19 @@ const TeacherField = styled.div`
   gap: 7px;
 
   label {
+    display: flex;
+    align-items: center;
+    gap: 5px;
     color: #334155;
     font-size: 13px;
     font-weight: 760;
   }
+`;
+
+const DeadlineHint = styled.span`
+  color: ${({ $overdue }) => ($overdue ? "#b91c1c" : "var(--muted)")};
+  font-size: 11px;
+  font-weight: 700;
 `;
 
 const TeacherTextarea = styled.textarea`
