@@ -6,6 +6,8 @@ import {
   ArrowLeft,
   Archive,
   ArchiveRestore,
+  AlertTriangle,
+  Bell,
   Bot,
   CalendarDays,
   Check,
@@ -185,6 +187,7 @@ const createInitialData = () => ({
 const normalizeStage = (stage, index) => {
   const base = createStageState(index);
   const storedSources = stage?.sources || stage?.diary?.__sources;
+  const sourceApprovals = stage?.responseGrades?.__sourceApprovals || {};
   const normalizedStatus = stage?.status === "На доработке" ? "Нужна доработка" : stage?.status;
   return {
     ...base,
@@ -200,7 +203,9 @@ const normalizeStage = (stage, index) => {
       ...base.responseGrades,
       ...(stage?.responseGrades || {}),
     },
-    sources: Array.isArray(storedSources) ? storedSources : [],
+    sources: Array.isArray(storedSources)
+      ? storedSources.map((source) => ({ year: "", ...source, teacherApproved: Boolean(sourceApprovals[source.id] ?? source.teacherApproved) }))
+      : [],
   };
 };
 
@@ -319,6 +324,10 @@ function App() {
   const [uploadingFiles, setUploadingFiles] = useState(false);
   const [aiLoading, setAiLoading] = useState(false);
   const [historyEntries, setHistoryEntries] = useState([]);
+  const [historyFilter, setHistoryFilter] = useState("all");
+  const [passwordRecovery, setPasswordRecovery] = useState(false);
+  const [showOnboarding, setShowOnboarding] = useState(false);
+  const [aiRemaining, setAiRemaining] = useState(null);
   const saveTimer = useRef(null);
   const role = profile?.role || "student";
 
@@ -351,8 +360,49 @@ function App() {
       const matchesClass = classFilter === "all" || project.classId === classFilter;
       const matchesStatus = statusFilter === "all" || project.stages.some((stage) => stage.status === statusFilter);
       return matchesQuery && matchesClass && matchesStatus;
+    }).sort((a, b) => {
+      const score = (project) => project.stages.reduce((total, stage) => {
+        const deadline = stage.responseGrades.__deadline;
+        const overdue = deadline && stage.status !== "Принят" && new Date(`${deadline}T23:59:59`) < new Date();
+        return total + (stage.status === "На проверке" ? 100 : 0) + (overdue ? 20 : 0) + (stage.status === "Нужна доработка" ? 5 : 0);
+      }, 0);
+      return score(b) - score(a);
     });
   }, [activeProjects, classFilter, projectSearch, statusFilter]);
+
+  const attentionItems = useMemo(() => {
+    const now = new Date();
+    const items = [];
+    for (const project of activeProjects) {
+      project.stages.forEach((stage, stageIndex) => {
+        const deadline = stage.responseGrades.__deadline;
+        const deadlineDate = deadline ? new Date(`${deadline}T23:59:59`) : null;
+        const overdue = deadlineDate && stage.status !== "Принят" && deadlineDate < now;
+        const dueSoon = deadlineDate && stage.status !== "Принят" && deadlineDate >= now && deadlineDate.getTime() - now.getTime() <= 3 * 24 * 60 * 60 * 1000;
+        if (role === "teacher" && stage.status === "На проверке") {
+          items.push({ project, stageIndex, kind: "review", text: `${project.owner}: этап ${stageIndex + 1} ждёт проверки` });
+        }
+        if (role === "student" && stage.status === "Нужна доработка") {
+          items.push({ project, stageIndex, kind: "revision", text: `Этап ${stageIndex + 1} возвращён на доработку` });
+        }
+        if (role === "student" && stage.teacherComment && ["Нужна доработка", "Принят"].includes(stage.status)) {
+          items.push({ project, stageIndex, kind: "comment", text: `Комментарий учителя к этапу ${stageIndex + 1}` });
+        }
+        if (overdue) {
+          items.push({ project, stageIndex, kind: "overdue", text: `${role === "teacher" ? `${project.owner}: ` : ""}просрочен этап ${stageIndex + 1}` });
+        } else if (dueSoon) {
+          items.push({ project, stageIndex, kind: "soon", text: `${role === "teacher" ? `${project.owner}: ` : ""}срок этапа ${stageIndex + 1} скоро истекает` });
+        }
+      });
+    }
+    const priority = { review: 0, revision: 0, overdue: 1, soon: 2, comment: 3 };
+    return items.sort((a, b) => priority[a.kind] - priority[b.kind]);
+  }, [activeProjects, role]);
+
+  const filteredHistoryEntries = useMemo(
+    () => historyFilter === "all" ? historyEntries : historyEntries.filter((entry) => entry.event_type === historyFilter),
+    [historyEntries, historyFilter],
+  );
 
   useEffect(() => {
     const loadWorkspace = async (currentSession) => {
@@ -443,12 +493,19 @@ function App() {
     };
 
     supabase.auth.getSession().then(({ data: authData }) => loadWorkspace(authData.session));
-    const { data: listener } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+    const { data: listener } = supabase.auth.onAuthStateChange((event, nextSession) => {
+      if (event === "PASSWORD_RECOVERY") setPasswordRecovery(true);
       setSession(nextSession);
       loadWorkspace(nextSession);
     });
     return () => listener.subscription.unsubscribe();
   }, []);
+
+  useEffect(() => {
+    if (!workspaceReady || role !== "student" || !session) return;
+    const key = `physics-onboarding-${session.user.id}`;
+    setShowOnboarding(localStorage.getItem(key) !== "done");
+  }, [role, session, workspaceReady]);
 
   useEffect(() => {
     if (!workspaceReady || !session) return undefined;
@@ -515,6 +572,7 @@ function App() {
       status: stage.status === "Не начат" ? "Черновик" : stage.status,
       diary: { ...stage.diary, [field]: value },
     }));
+    if (Number.isInteger(response.remainingAiRequests)) setAiRemaining(response.remainingAiRequests);
   };
 
   const handleResponseGradeChange = (field, grade) => {
@@ -631,15 +689,20 @@ function App() {
   const addSource = () => {
     updateStage((stage) => ({
       ...stage,
-      sources: [...stage.sources, { id: crypto.randomUUID(), title: "", author: "", url: "", verified: false, useful: "" }],
+      sources: [...stage.sources, { id: crypto.randomUUID(), title: "", author: "", year: "", url: "", verified: false, teacherApproved: false, useful: "" }],
     }));
   };
 
   const updateSource = (sourceId, field, value) => {
+    if (role === "student" && field === "teacherApproved") return;
+    if (role === "teacher" && field !== "teacherApproved") return;
     updateStage((stage) => ({
       ...stage,
       status: stage.status === "Не начат" ? "Черновик" : stage.status,
       sources: stage.sources.map((source) => source.id === sourceId ? { ...source, [field]: value } : source),
+      responseGrades: field === "teacherApproved"
+        ? { ...stage.responseGrades, __sourceApprovals: { ...(stage.responseGrades.__sourceApprovals || {}), [sourceId]: value } }
+        : stage.responseGrades,
     }));
   };
 
@@ -807,6 +870,16 @@ function App() {
     setClassCode("");
   };
 
+  const openAttentionItem = (item) => {
+    setSelectedProjectId(item.project.id);
+    setSelectedStage(item.stageIndex);
+  };
+
+  const finishOnboarding = () => {
+    if (session) localStorage.setItem(`physics-onboarding-${session.user.id}`, "done");
+    setShowOnboarding(false);
+  };
+
   const signOut = async () => {
     clearTimeout(saveTimer.current);
     try {
@@ -853,6 +926,34 @@ function App() {
     </ClassPanel>
   );
 
+  const attentionPanel = attentionItems.length ? (
+    <AttentionPanel>
+      <AttentionTitle><Bell size={15} />{role === "teacher" ? "Требуют внимания" : "Уведомления"}<AttentionCount>{attentionItems.length}</AttentionCount></AttentionTitle>
+      {attentionItems.slice(0, 8).map((item, index) => (
+        <AttentionButton key={`${item.project.id}-${item.stageIndex}-${item.kind}-${index}`} type="button" onClick={() => openAttentionItem(item)} $urgent={item.kind === "overdue"}>
+          {item.kind === "overdue" ? <AlertTriangle size={14} /> : <Bell size={14} />}
+          <span>{item.text}</span>
+        </AttentionButton>
+      ))}
+    </AttentionPanel>
+  ) : null;
+
+  const onboardingModal = showOnboarding && role === "student" ? (
+    <ModalBackdrop role="presentation">
+      <OnboardingCard role="dialog" aria-modal="true" aria-labelledby="onboarding-title">
+        <BrandMark><Sparkles size={18} /></BrandMark>
+        <h2 id="onboarding-title">Начните работу за четыре шага</h2>
+        <OnboardingSteps>
+          <li><strong>1. Подключитесь к классу</strong><span>Введите код, который дал учитель.</span></li>
+          <li><strong>2. Создайте проект</strong><span>Нажмите «+» рядом с разделом «Проекты».</span></li>
+          <li><strong>3. Укажите имя и тему</strong><span>Эти данные увидит ваш учитель.</span></li>
+          <li><strong>4. Заполните этап 1</strong><span>Сохранение выполняется автоматически.</span></li>
+        </OnboardingSteps>
+        <PrimaryButton type="button" onClick={finishOnboarding}>Понятно, начать работу</PrimaryButton>
+      </OnboardingCard>
+    </ModalBackdrop>
+  ) : null;
+
   const renderProjectCard = (project) => {
     const done = project.stages.filter((stage) => stage.status === "Принят").length;
     const awaitingReview = project.stages.filter((stage) => stage.status === "На проверке").length;
@@ -898,12 +999,13 @@ function App() {
   };
 
   if (authLoading) return <LoadingScreen>Загрузка приложения…</LoadingScreen>;
-  if (!session) return <AuthScreen />;
+  if (!session || passwordRecovery) return <AuthScreen recovery={passwordRecovery} onRecoveryComplete={() => setPasswordRecovery(false)} />;
   if (workspaceError) return <LoadingScreen>{workspaceError}</LoadingScreen>;
 
   if (!selectedProject || !stageState) {
     return (
       <Shell>
+        {onboardingModal}
         <Header>
           <Brand>
             <BrandMark><Sparkles size={18} /></BrandMark>
@@ -920,14 +1022,15 @@ function App() {
         <Main>
           <Sidebar>
             <SidebarTop>
-              <SidebarTitle><LayoutDashboard size={17} />Dashboard</SidebarTitle>
+              <SidebarTitle><LayoutDashboard size={17} />Проекты</SidebarTitle>
               {role === "student" && <IconButton aria-label="Создать проект" title="Создать проект" onClick={createProject}><Plus size={18} /></IconButton>}
             </SidebarTop>
             {classPanel}
+            {attentionPanel}
           </Sidebar>
           <EmptyWorkspace>
             <h1>Проектов пока нет</h1>
-            <p>Создайте новый проект кнопкой «+» на Dashboard.</p>
+            <p>Создайте новый проект кнопкой «+» в разделе «Проекты».</p>
           </EmptyWorkspace>
         </Main>
       </Shell>
@@ -936,6 +1039,7 @@ function App() {
 
   return (
     <Shell>
+      {onboardingModal}
       <Header>
         <Brand>
           <BrandMark>
@@ -963,12 +1067,13 @@ function App() {
           <SidebarTop>
             <SidebarTitle>
               <LayoutDashboard size={17} />
-              Dashboard
+              Проекты
             </SidebarTitle>
             {role === "student" && <IconButton aria-label="Создать проект" title="Создать проект" onClick={createProject}><Plus size={18} /></IconButton>}
           </SidebarTop>
 
           {classPanel}
+          {attentionPanel}
 
           {role === "teacher" && (
             <TeacherFilters>
@@ -1112,6 +1217,7 @@ function App() {
                   <div>
                     <h3>ИИ-помощник</h3>
                     <p>Диалог сохраняется в этапе и помогает фиксировать вклад генеративного ИИ.</p>
+                    {role === "student" && <AiQuota>{aiRemaining === null ? "Лимит: до 20 запросов в день" : `Осталось запросов сегодня: ${aiRemaining}`}</AiQuota>}
                   </div>
                 </SectionHeading>
                 {role === "student" && selectedStage !== 4 && <QuickPrompts>
@@ -1217,10 +1323,12 @@ function App() {
                         <SourceGrid>
                           <Input disabled={role === "teacher"} value={source.title} placeholder="Название" onChange={(event) => updateSource(source.id, "title", event.target.value)} />
                           <Input disabled={role === "teacher"} value={source.author} placeholder="Автор" onChange={(event) => updateSource(source.id, "author", event.target.value)} />
+                          <Input disabled={role === "teacher"} value={source.year || ""} placeholder="Год публикации" onChange={(event) => updateSource(source.id, "year", event.target.value)} />
                           <Input disabled={role === "teacher"} value={source.url} placeholder="Ссылка" onChange={(event) => updateSource(source.id, "url", event.target.value)} />
                           <Input disabled={role === "teacher"} value={source.useful} placeholder="Чем источник полезен" onChange={(event) => updateSource(source.id, "useful", event.target.value)} />
                         </SourceGrid>
                         <VerifiedLabel><input type="checkbox" disabled={role === "teacher"} checked={source.verified} onChange={(event) => updateSource(source.id, "verified", event.target.checked)} />Существование и содержание источника проверены</VerifiedLabel>
+                        <VerifiedLabel $approved={source.teacherApproved}><input type="checkbox" disabled={role === "student"} checked={Boolean(source.teacherApproved)} onChange={(event) => updateSource(source.id, "teacherApproved", event.target.checked)} />Одобрено учителем</VerifiedLabel>
                       </SourceCard>
                     )) : <EmptyHint>Источники пока не добавлены.</EmptyHint>}
                   </SourcesSection>
@@ -1331,15 +1439,17 @@ function App() {
                 </TeacherField>
                 <TeacherField>
                   <label htmlFor="grade">Оценка</label>
-                  <Input
+                  <Select
                     id="grade"
                     disabled={role === "student"}
                     value={stageState.grade}
-                    placeholder="Например: 5"
                     onChange={(event) =>
                       updateStage((stage) => ({ ...stage, grade: event.target.value }))
                     }
-                  />
+                  >
+                    <option value="">Не выставлена</option>
+                    {[1, 2, 3, 4, 5].map((grade) => <option key={grade} value={grade}>{grade}</option>)}
+                  </Select>
                 </TeacherField>
                 <ButtonGrid>
                   <SecondaryButton
@@ -1360,7 +1470,12 @@ function App() {
                 {role === "teacher" && (
                   <HistorySection>
                     <HistoryHeader><History size={16} />Журнал изменений</HistoryHeader>
-                    {historyEntries.length ? historyEntries.map((entry) => (
+                    <HistoryFilters>
+                      {[["all", "Все"], ["student_submission", "Ученик"], ["ai_interaction", "ИИ"], ["teacher_review", "Учитель"]].map(([value, label]) => (
+                        <HistoryFilterButton key={value} type="button" $active={historyFilter === value} onClick={() => setHistoryFilter(value)}>{label}</HistoryFilterButton>
+                      ))}
+                    </HistoryFilters>
+                    {filteredHistoryEntries.length ? filteredHistoryEntries.map((entry) => (
                       <HistoryItem key={entry.id}>
                         <HistoryMeta>
                           <strong>{entry.event_type === "ai_interaction" ? "Диалог с ИИ" : entry.event_type === "teacher_review" ? "Проверка учителя" : "Отправка ученика"}</strong>
@@ -1369,7 +1484,7 @@ function App() {
                         {entry.prompt && <HistoryBlock><b>Запрос ученика</b><p>{entry.prompt}</p></HistoryBlock>}
                         {entry.ai_response && <HistoryBlock><b>Ответ ИИ</b><p>{entry.ai_response}</p></HistoryBlock>}
                         {entry.event_type === "student_submission" && entry.after_value?.diary && <HistoryBlock><b>Ответы ученика</b>{stageFields[selectedStage].filter((field) => entry.after_value.diary[field]).map((field) => <p key={field}><strong>{field}:</strong> {entry.after_value.diary[field]}</p>)}</HistoryBlock>}
-                        {entry.event_type === "student_submission" && entry.before_value?.diary && <HistoryBlock><b>Изменено после предыдущей проверки</b>{stageFields[selectedStage].filter((field) => entry.before_value.diary[field] !== entry.after_value?.diary?.[field]).map((field) => <p key={field}><strong>{field}:</strong> «{entry.before_value.diary[field] || "не заполнено"}» → «{entry.after_value?.diary?.[field] || "удалено"}»</p>)}</HistoryBlock>}
+                        {entry.event_type === "student_submission" && entry.before_value?.diary && <HistoryBlock><b>Изменено после предыдущей проверки</b>{stageFields[selectedStage].filter((field) => entry.before_value.diary[field] !== entry.after_value?.diary?.[field]).map((field) => <HistoryDiff key={field}><strong>{field}</strong><HistoryBefore>Было: {entry.before_value.diary[field] || "не заполнено"}</HistoryBefore><HistoryAfter>Стало: {entry.after_value?.diary?.[field] || "удалено"}</HistoryAfter></HistoryDiff>)}</HistoryBlock>}
                         {entry.event_type === "teacher_review" && <HistoryBlock><b>Решение учителя</b><p>{entry.after_value?.status || "Проверено"}{entry.after_value?.teacherComment ? `: ${entry.after_value.teacherComment}` : ""}</p></HistoryBlock>}
                       </HistoryItem>
                     )) : <EmptyHint>Записей по этому этапу пока нет.</EmptyHint>}
@@ -2221,7 +2336,7 @@ const VerifiedLabel = styled.label`
   display: flex;
   align-items: center;
   gap: 8px;
-  color: #334155;
+  color: ${({ $approved }) => ($approved ? "#15803d" : "#334155")};
   font-size: 12px;
   font-weight: 700;
 `;
@@ -2590,6 +2705,132 @@ const HistoryBlock = styled.div`
 
   b { color: #475569; }
   p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+`;
+
+const AiQuota = styled.span`
+  display: inline-block;
+  margin-top: 6px;
+  color: #475569;
+  font-size: 12px;
+  font-weight: 700;
+`;
+
+const AttentionPanel = styled.section`
+  display: grid;
+  gap: 7px;
+  margin-bottom: 20px;
+  padding: 12px;
+  border: 1px solid #dbeafe;
+  border-radius: 10px;
+  background: #eff6ff;
+`;
+
+const AttentionTitle = styled.div`
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: #1e3a8a;
+  font-size: 12px;
+  font-weight: 800;
+`;
+
+const AttentionCount = styled.span`
+  margin-left: auto;
+  padding: 2px 7px;
+  border-radius: 999px;
+  color: #ffffff;
+  background: var(--blue);
+  font-size: 10px;
+`;
+
+const AttentionButton = styled.button`
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: start;
+  gap: 7px;
+  width: 100%;
+  padding: 8px;
+  border: 0;
+  border-radius: 7px;
+  color: ${({ $urgent }) => ($urgent ? "#991b1b" : "#334155")};
+  background: ${({ $urgent }) => ($urgent ? "#fef2f2" : "rgba(255,255,255,.8)")};
+  font: inherit;
+  font-size: 11px;
+  line-height: 1.35;
+  text-align: left;
+  cursor: pointer;
+`;
+
+const HistoryFilters = styled.div`
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+`;
+
+const HistoryFilterButton = styled.button`
+  padding: 4px 7px;
+  border: 1px solid ${({ $active }) => ($active ? "var(--blue)" : "var(--line)")};
+  border-radius: 999px;
+  color: ${({ $active }) => ($active ? "#ffffff" : "#475569")};
+  background: ${({ $active }) => ($active ? "var(--blue)" : "#ffffff")};
+  font: inherit;
+  font-size: 10px;
+  font-weight: 700;
+  cursor: pointer;
+`;
+
+const HistoryDiff = styled.div`
+  display: grid;
+  gap: 4px;
+  margin-top: 4px;
+`;
+
+const HistoryBefore = styled.span`
+  padding: 5px 7px;
+  border-radius: 5px;
+  color: #991b1b;
+  background: #fef2f2;
+  text-decoration: line-through;
+`;
+
+const HistoryAfter = styled.span`
+  padding: 5px 7px;
+  border-radius: 5px;
+  color: #166534;
+  background: #f0fdf4;
+`;
+
+const ModalBackdrop = styled.div`
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(15, 23, 42, 0.55);
+`;
+
+const OnboardingCard = styled.section`
+  display: grid;
+  gap: 18px;
+  width: min(100%, 520px);
+  padding: 28px;
+  border-radius: 16px;
+  background: #ffffff;
+  box-shadow: 0 24px 80px rgba(15, 23, 42, .3);
+
+  h2 { margin: 0; font-size: 23px; }
+`;
+
+const OnboardingSteps = styled.ol`
+  display: grid;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+
+  li { display: grid; gap: 3px; padding-left: 12px; border-left: 3px solid #bfdbfe; }
+  span { color: var(--muted); font-size: 13px; }
 `;
 
 export default App;

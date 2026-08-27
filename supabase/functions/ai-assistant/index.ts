@@ -47,6 +47,20 @@ Deno.serve(async (request) => {
       return json({ error: "ИИ-помощник доступен только ученику его проекта" }, 403);
     }
 
+    const dailyLimit = Math.max(1, Number(Deno.env.get("AI_DAILY_LIMIT") || 20));
+    const today = new Date();
+    today.setUTCHours(0, 0, 0, 0);
+    const { count: requestsToday, error: countError } = await supabase
+      .from("stage_history")
+      .select("id", { count: "exact", head: true })
+      .eq("actor_id", userData.user.id)
+      .eq("event_type", "ai_interaction")
+      .gte("created_at", today.toISOString());
+    if (countError) return json({ error: "Не удалось проверить дневной лимит ИИ" }, 500);
+    if ((requestsToday || 0) >= dailyLimit) {
+      return json({ error: `Дневной лимит исчерпан (${dailyLimit} запросов). Попробуйте завтра.` }, 429);
+    }
+
     const context = Array.isArray(recentMessages)
       ? recentMessages.slice(-6).map((message) => `${message.role === "ai" ? "Ассистент" : "Ученик"}: ${String(message.text).slice(0, 1500)}`).join("\n")
       : "";
@@ -115,7 +129,7 @@ Deno.serve(async (request) => {
       ai_response: answer,
     });
 
-    return json({ userMessage, aiMessage });
+    return json({ userMessage, aiMessage, remainingAiRequests: Math.max(0, dailyLimit - (requestsToday || 0) - 1) });
   } catch (error) {
     console.error(error);
     return json({ error: "Внутренняя ошибка серверной функции" }, 500);

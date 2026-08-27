@@ -1,9 +1,9 @@
 import React, { useState } from "react";
 import styled from "@emotion/styled";
-import { GraduationCap, LogIn, Sparkles, UserPlus } from "lucide-react";
+import { GraduationCap, KeyRound, LogIn, Sparkles, UserPlus } from "lucide-react";
 import { supabase } from "./supabaseClient";
 
-export default function AuthScreen() {
+export default function AuthScreen({ recovery = false, onRecoveryComplete }) {
   const [mode, setMode] = useState("login");
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
@@ -18,7 +18,19 @@ export default function AuthScreen() {
     setError("");
     setMessage("");
 
-    if (mode === "signup") {
+    if (recovery) {
+      const { error: updateError } = await supabase.auth.updateUser({ password });
+      if (updateError) setError(updateError.message);
+      else {
+        setMessage("Пароль изменён. Теперь можно продолжить работу.");
+        onRecoveryComplete?.();
+      }
+    } else if (mode === "reset") {
+      const redirectTo = window.location.href.split("#")[0].split("?")[0];
+      const { error: resetError } = await supabase.auth.resetPasswordForEmail(email, { redirectTo });
+      if (resetError) setError(resetError.message);
+      else setMessage("Ссылка для восстановления отправлена на почту.");
+    } else if (mode === "signup") {
       const { error: signUpError } = await supabase.auth.signUp({
         email,
         password,
@@ -43,30 +55,30 @@ export default function AuthScreen() {
         <BrandMark><Sparkles size={22} /></BrandMark>
         <Header>
           <h1>Дневник проекта по физике</h1>
-          <p>{mode === "login" ? "Войдите в свой аккаунт" : "Регистрация ученика"}</p>
+          <p>{recovery ? "Придумайте новый пароль" : mode === "login" ? "Войдите в свой аккаунт" : mode === "signup" ? "Регистрация ученика" : "Восстановление доступа"}</p>
         </Header>
 
-        <Tabs>
+        {!recovery && <Tabs>
           <Tab type="button" active={mode === "login"} onClick={() => setMode("login")}>
             Вход
           </Tab>
           <Tab type="button" active={mode === "signup"} onClick={() => setMode("signup")}>
             Регистрация
           </Tab>
-        </Tabs>
+        </Tabs>}
 
         <Form onSubmit={submit}>
-          {mode === "signup" && (
+          {!recovery && mode === "signup" && (
             <Field>
               <span>Имя и фамилия</span>
               <input required value={fullName} onChange={(event) => setFullName(event.target.value)} />
             </Field>
           )}
-          <Field>
+          {!recovery && <Field>
             <span>Email</span>
             <input required type="email" value={email} onChange={(event) => setEmail(event.target.value)} />
-          </Field>
-          <Field>
+          </Field>}
+          {(recovery || mode !== "reset") && <Field>
             <span>Пароль</span>
             <input
               required
@@ -75,19 +87,21 @@ export default function AuthScreen() {
               value={password}
               onChange={(event) => setPassword(event.target.value)}
             />
-          </Field>
+          </Field>}
           {error && <ErrorMessage>{error}</ErrorMessage>}
           {message && <SuccessMessage>{message}</SuccessMessage>}
           <SubmitButton disabled={submitting}>
-            {mode === "login" ? <LogIn size={17} /> : <UserPlus size={17} />}
-            {submitting ? "Подождите…" : mode === "login" ? "Войти" : "Зарегистрироваться"}
+            {recovery || mode === "reset" ? <KeyRound size={17} /> : mode === "login" ? <LogIn size={17} /> : <UserPlus size={17} />}
+            {submitting ? "Подождите…" : recovery ? "Сохранить новый пароль" : mode === "login" ? "Войти" : mode === "signup" ? "Зарегистрироваться" : "Отправить ссылку"}
           </SubmitButton>
+          {!recovery && mode === "login" && <TextButton type="button" onClick={() => { setMode("reset"); setError(""); setMessage(""); }}>Забыли пароль?</TextButton>}
+          {!recovery && mode === "reset" && <TextButton type="button" onClick={() => { setMode("login"); setError(""); setMessage(""); }}>Вернуться ко входу</TextButton>}
         </Form>
 
-        <TeacherHint>
+        {!recovery && mode !== "reset" && <TeacherHint>
           <GraduationCap size={17} />
           Аккаунт учителя создаётся администратором после регистрации.
-        </TeacherHint>
+        </TeacherHint>}
       </Card>
     </Page>
   );
@@ -108,6 +122,17 @@ const Card = styled.section`
   border-radius: 16px;
   background: #ffffff;
   box-shadow: 0 24px 70px rgba(15, 23, 42, 0.1);
+`;
+
+const TextButton = styled.button`
+  border: 0;
+  padding: 4px;
+  color: var(--blue);
+  background: transparent;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
 `;
 
 const BrandMark = styled.div`
